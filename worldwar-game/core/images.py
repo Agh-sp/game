@@ -23,6 +23,7 @@ IMAGE_SECTIONS = {
     "currency": "💵 ارز اصلی",
     "season": "🎬 سیزن جدید",
     "flag": "🏳 پرچم کشورها",
+    "war": "⚔️ جنگ و نبرد",
     "general": "📦 عمومی",
 }
 

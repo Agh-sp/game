@@ -7,9 +7,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from core.db import db, get_setting
-from core.economy import (announce, army_power, bump_progress, get_country,
+from core.economy import (army_power, bump_progress, get_country,
                           get_state, has_project_named, is_disarmed,
                           is_jammed, is_leader_blocked, sub_asset, veto_users)
+from core.images import announce_img
 from core.utils import fmt, add_hours, iso, hours_left, fmt_hm, jloads, clamp
 from gamebot.common import back_row, blocked_banner, kb, send_home, dm
 
@@ -161,10 +162,10 @@ async def create_war(attacker_id: int, defender_id: int, reason: str,
             "INSERT INTO un_votes(title, kind, subject_id, options, ends_at, created_by) VALUES(?,?,?,?,?,?)",
             (f"مجوز جنگ {a_country['name']} علیه {d_country['name']}",
              "war", war_id, '["تایید","رد","بی‌طرف"]', add_hours(hours), attacker_id))
-        await announce(bot,
-                       f"🗳 سازمان ملل: درخواست <b>مجوز جنگ</b> {a_country['flag']} {a_country['name']} "
-                       f"علیه {d_country['flag']} {d_country['name']}\nدلیل: {reason}\n"
-                       "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.")
+        await announce_img(bot,
+                           f"🗳 سازمان ملل: درخواست <b>مجوز جنگ</b> {a_country['flag']} {a_country['name']} "
+                           f"علیه {d_country['flag']} {d_country['name']}\nدلیل: {reason}\n"
+                           "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.", "war")
     else:
         # جنگ فوری + بررسی جنایت جنگی
         hours = float(await get_setting("vote_duration_hours", "24"))
@@ -172,9 +173,9 @@ async def create_war(attacker_id: int, defender_id: int, reason: str,
             "INSERT INTO un_votes(title, kind, subject_id, options, ends_at, created_by) VALUES(?,?,?,?,?,?)",
             (f"آیا جنگ {a_country['name']} علیه {d_country['name']} جنایت جنگی است؟",
              "crime", war_id, '["جنایت جنگی است","جنایت نیست","بی‌طرف"]', add_hours(hours), attacker_id))
-        await announce(bot,
-                       f"⚔️ {a_country['flag']} {a_country['name']} بدون مجوز سازمان ملل به "
-                       f"{d_country['flag']} {d_country['name']} اعلان جنگ داد!")
+        await announce_img(bot,
+                           f"⚔️ {a_country['flag']} {a_country['name']} بدون مجوز سازمان ملل به "
+                           f"{d_country['flag']} {d_country['name']} اعلان جنگ داد!", "war")
     try:
         await dm(bot, 
             defender_id,
@@ -245,26 +246,41 @@ async def attack_wars(call: CallbackQuery):
     if await is_leader_blocked(call.from_user.id):
         return await call.answer("🚫 رهبر شما ترور شده!", show_alert=True)
     await settle_votes(call.bot)
+    # هر جنگی که در آن مهاجم یا مدافع باشم (حمله متقابل مدافع هم ممکن است)
     wars = await db.fetchall(
-        "SELECT w.*, cd.name AS def_name, cd.flag AS def_flag, cd.has_sea, cd.id AS cid "
-        "FROM wars w JOIN users ud ON ud.id=w.defender_id JOIN countries cd ON cd.id=ud.country_id "
-        "WHERE w.attacker_id=? AND w.status='active'", (call.from_user.id,))
+        "SELECT w.*, ca.name AS atk_name, ca.flag AS atk_flag, "
+        "cd.name AS def_name, cd.flag AS def_flag, cd.has_sea, cd.id AS cid "
+        "FROM wars w "
+        "JOIN users ua ON ua.id=w.attacker_id JOIN countries ca ON ca.id=ua.country_id "
+        "JOIN users ud ON ud.id=w.defender_id JOIN countries cd ON cd.id=ud.country_id "
+        "WHERE (w.attacker_id=? OR w.defender_id=?) AND w.status='active' ORDER BY w.id DESC",
+        (call.from_user.id, call.from_user.id))
     if not wars:
         return await call.answer("اول باید اعلان جنگ بدهید!", show_alert=True)
-    rows = [[(f"🎯 {w['def_flag']} {w['def_name']}", f"g|watkc|{w['id']}")] for w in wars]
+    rows = []
+    for w in wars:
+        if w["attacker_id"] == call.from_user.id:
+            rows.append([(f"🎯 {w['def_flag']} {w['def_name']} — 🗡 مهاجم", f"g|watkc|{w['id']}")])
+        else:
+            rows.append([(f"⚔️ {w['atk_flag']} {w['atk_name']} — 🛡 حمله متقابل!", f"g|watkc|{w['id']}")])
     rows.append(back_row("g|war"))
     await call.answer()
-    await call.message.edit_text("🗡 <b>حمله</b>\n\nجنگ فعال خود را انتخاب کنید:", reply_markup=kb(rows))
+    await call.message.edit_text("🗡 <b>حمله</b>\n\nجنگ فعال خود را انتخاب کنید "
+                                 "(مدافع هم می‌تواند حمله متقابل به مهاجم بکند):", reply_markup=kb(rows))
 
 
 @router.callback_query(F.data.startswith("g|watkc|"))
 async def attack_type(call: CallbackQuery, state: FSMContext):
     war_id = int(call.data.split("|")[2])
-    war = await db.fetchone("SELECT * FROM wars WHERE id=? AND attacker_id=? AND status='active'",
-                            (war_id, call.from_user.id))
+    # هر دو طرف جنگ می‌توانند حمله کنند (مدافع = حمله متقابل)
+    war = await db.fetchone(
+        "SELECT * FROM wars WHERE id=? AND status='active' AND (attacker_id=? OR defender_id=?)",
+        (war_id, call.from_user.id, call.from_user.id))
     if not war:
         return await call.answer("جنگ فعال نیست", show_alert=True)
-    d_country = await get_country(war["defender_id"])
+    role = "attacker" if war["attacker_id"] == call.from_user.id else "defender"
+    enemy_id = war["defender_id"] if role == "attacker" else war["attacker_id"]
+    d_country = await get_country(enemy_id)
     a_country = await get_country(call.from_user.id)
     # بررسی قواعد هر نوع حمله
     my_equipment = await db.fetchall(
@@ -284,8 +300,6 @@ async def attack_type(call: CallbackQuery, state: FSMContext):
     space_ok = has("space")
     mixed_ok = sum([sea_ok, air_ok, land_ok, space_ok]) >= 2
 
-    for key, title in ATTACK_TYPES.items():
-        ok = {"sea": sea_ok, "air": air_ok, "land": land_ok, "space": space_ok, "mixed": mixed_ok}[key]
     rules_txt = {
         "sea": "فقط کشورهای دارای دریا (نیاز به نیروی دریایی)",
         "air": "نیاز به ناو هواپیمابر یا پایگاه نزدیک",
@@ -303,7 +317,7 @@ async def attack_type(call: CallbackQuery, state: FSMContext):
         if ok:
             rows.append([(f"{title}", f"g|wtype|{war_id}|{key}")])
     rows.append(back_row("g|watk"))
-    await state.update_data(plan={})
+    await state.update_data(plan={}, role=role, enemy_id=enemy_id)
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
 
@@ -317,7 +331,7 @@ async def attack_equipment(call: CallbackQuery, state: FSMContext):
     await _equip_picker(call, state, allowed_cats)
 
 
-async def _equip_picker(call: CallbackQuery, state: FSMContext, allowed_cats: list):
+async def _equip_picker_payload(user_id: int, state: FSMContext, allowed_cats: list) -> tuple[str, list]:
     data = await state.get_data()
     plan = data.get("plan", {})
     my_equipment = await db.fetchall(
@@ -325,10 +339,10 @@ async def _equip_picker(call: CallbackQuery, state: FSMContext, allowed_cats: li
         "JOIN equipment e ON e.id=a.item_id JOIN equipment_categories c ON c.id=e.category_id "
         "WHERE a.user_id=? AND a.item_type='equipment' AND a.quantity>0 AND c.key IN (%s) "
         "ORDER BY c.id, e.id" % ",".join("?" * len(allowed_cats)),
-        (call.from_user.id, *allowed_cats))
+        (user_id, *allowed_cats))
     soldiers = await db.fetchall(
         "SELECT s.*, a.quantity FROM player_assets a JOIN soldier_types s ON s.id=a.item_id "
-        "WHERE a.user_id=? AND a.item_type='soldier' AND a.quantity>0", (call.from_user.id,))
+        "WHERE a.user_id=? AND a.item_type='soldier' AND a.quantity>0", (user_id,))
     lines = ["🗡 <b>انتخاب نیروی حمله</b>\n"]
     if plan:
         lines.append("📦 <b>نیروهای انتخاب‌شده:</b>")
@@ -348,6 +362,11 @@ async def _equip_picker(call: CallbackQuery, state: FSMContext, allowed_cats: li
     if plan:
         rows.append([("⚔️ حمله!", "g|wgo")])
     rows.append(back_row("g|watk"))
+    return "\n".join(lines), rows
+
+
+async def _equip_picker(call: CallbackQuery, state: FSMContext, allowed_cats: list):
+    lines, rows = await _equip_picker_payload(call.from_user.id, state, allowed_cats)
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
 
@@ -387,34 +406,32 @@ async def attack_qty_input(message: Message, state: FSMContext):
     await state.update_data(plan=plan)
     allowed_cats = {"sea": ["sea"], "air": ["air"], "land": ["land"], "space": ["space"],
                     "mixed": ["sea", "air", "land", "space"]}[data.get("atype", "mixed")]
-    await _equip_picker(_FakeCall(message), state, allowed_cats)
-
-
-class _FakeCall:
-    def __init__(self, message: Message):
-        self.message = message
-        self.from_user = message.from_user
-        self.bot = message.bot
-
-    async def answer(self, *_a, **_k):
-        pass
+    # ⚠️ edit نکنید: پیام کاربر ویرایش‌ناپذیر است — picker را به‌عنوان پیام جدید می‌فریم
+    lines, rows = await _equip_picker_payload(message.from_user.id, state, allowed_cats)
+    await send_home(message, "\n".join(lines), reply_markup=kb(rows))
 
 
 @router.callback_query(F.data == "g|wgo")
 async def attack_go(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     plan = data.get("plan", {})
-    war = await db.fetchone("SELECT * FROM wars WHERE id=? AND attacker_id=? AND status='active'",
-                            (data.get("war_id"), call.from_user.id))
+    war = await db.fetchone(
+        "SELECT * FROM wars WHERE id=? AND status='active' AND (attacker_id=? OR defender_id=?)",
+        (data.get("war_id"), call.from_user.id, call.from_user.id))
     if not war or not plan:
         await state.clear()
         return await call.answer("جنگ یا نیروها نامعتبر!", show_alert=True)
+    role = data.get("role", "attacker")
     await state.clear()
-    await resolve_battle(call, war, plan, data.get("atype", "mixed"))
+    await resolve_battle(call, war, plan, data.get("atype", "mixed"), role)
 
 
-async def resolve_battle(call, war: dict, plan: dict, atype: str):
-    attacker_id, defender_id = war["attacker_id"], war["defender_id"]
+async def resolve_battle(call, war: dict, plan: dict, atype: str, role: str = "attacker"):
+    # در حمله متقابل، مدافع خود را مهاجم نبرد می‌دانیم
+    if role == "defender":
+        attacker_id, defender_id = call.from_user.id, war["attacker_id"]
+    else:
+        attacker_id, defender_id = war["attacker_id"], war["defender_id"]
     a_country = await get_country(attacker_id)
     d_country = await get_country(defender_id)
 
@@ -503,7 +520,7 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         + (f"🏆 <b>{a_country['name']} پیروز شد!</b>\n💰 غارت: {fmt(loot)}" if won
            else f"🛡 <b>{d_country['name']} دفاع کرد!</b>")
     )
-    await announce(call.bot, result_text)
+    await announce_img(call.bot, result_text, "war")
     await call.answer()
     await call.message.edit_text(result_text + "\n\nتلفات مهاجم: " +
                                  ("۱۵٪" if won else "۴۰٪") + " | تلفات مدافع: " +
@@ -573,7 +590,7 @@ async def cyber_ops_menu(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("g|cy|"))
 async def cyber_execute(call: CallbackQuery, state: FSMContext):
-    _, op, defender_id = call.data.split("|")
+    _, _, op, defender_id = call.data.split("|")
     defender_id = int(defender_id)
     if not await cyber_cooldown_ok(call.from_user.id, defender_id):
         return await call.answer("⏳ هنوز زمان cooldown تمام نشده", show_alert=True)
@@ -620,7 +637,7 @@ async def cyber_execute(call: CallbackQuery, state: FSMContext):
                 pass
         else:
             msg = "❌ عملیات اختلال سرور ناموفق بود!"
-    await announce(call.bot, f"🕶 گزارش محرمانه: عملیات سایبری علیت {d_country['name']} انجام شد.")
+    await announce_img(call.bot, f"🕶 گزارش محرمانه: عملیات سایبری علیت {d_country['name']} انجام شد.", "war")
     await call.answer()
     await call.message.edit_text(msg, reply_markup=kb([back_row("g|war")]))
 

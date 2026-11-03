@@ -5,6 +5,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from core.db import db
+from core.images import announce_img
 from core.economy import announce, bump_progress, satisfaction_recompute
 from core.utils import fmt, hours_left, fmt_hm, iso, add_hours
 from gamebot.common import back_row, kb, send_home
@@ -145,8 +146,9 @@ async def create_project(message: Message, b: dict, name: str, height: int | Non
     country = await db.fetchone(
         "SELECT c.* FROM countries c JOIN users u ON u.country_id=c.id WHERE u.id=?", (user["id"],))
     height_txt = f" ({fmt(height)} متر)" if height else ""
-    await announce(message.bot,
-                   f"🏗 آغاز ساخت «{name}» ({b['name']}{height_txt}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}")
+    await announce_img(message.bot,
+                       f"🏗 آغاز ساخت «{name}» ({b['name']}{height_txt}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}",
+                       "general")
     await send_home(message, 
         f"✅ ساخت «<b>{name}</b>» آغاز شد!\n"
         f"⏱ زمان ساخت: <b>{fmt_hm(duration)}</b>\n"
@@ -223,8 +225,9 @@ async def company_create(message: Message, state: FSMContext):
     )
     country = await db.fetchone(
         "SELECT c.* FROM countries c JOIN users u ON u.country_id=c.id WHERE u.id=?", (user["id"],))
-    await announce(message.bot,
-                   f"🏢 تاسیس شرکت «{name}» ({t['title']}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}")
+    await announce_img(message.bot,
+                       f"🏢 تاسیس شرکت «{name}» ({t['title']}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}",
+                       "general")
     await bump_progress(user["id"], "built")
     await send_home(message, 
         f"✅ شرکت «<b>{name}</b>» تاسیس شد!\n💰 درآمد روزانه: {fmt(t['base_income'])}\n"

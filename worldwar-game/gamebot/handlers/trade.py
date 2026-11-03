@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from core.db import db, get_setting
-from core.economy import get_country, get_state
+from core.economy import at_war, get_country, get_state
 from core.events import log_event
 from core.images import announce_img
 from core.treaties import (TREATY_KINDS, break_treaty, confirm_treaty,
@@ -58,6 +58,12 @@ def _sec_on(key: str):
 async def trade_menu(call: CallbackQuery):
     treaties = await active_treaties(call.from_user.id)
     lines = ["🤝 <b>تجارت بین‌المللی</b>\n"]
+    wars = await db.fetchall(
+        "SELECT w.* FROM wars w WHERE w.status='active' AND (w.attacker_id=? OR w.defender_id=?)",
+        (call.from_user.id, call.from_user.id))
+    if wars:
+        lines.append("\n⚔️ <b>وضعیت جنگ:</b> در جنگ هستید — با کشورهای درگیر جنگ "
+                     "فقط بخش 🕊 مذاکره فعال است (تجارت مستقیم و پایگاه نظامی مسدود است).")
     if treaties:
         lines.append("📜 <b>پیمان‌های فعال من:</b>")
         for t in treaties[:8]:
@@ -297,15 +303,22 @@ async def negotiation_relay(message: Message, state: FSMContext):
         "SELECT user_id FROM negotiation_members WHERE neg_id=? AND user_id!=?",
         (neg_id, message.from_user.id))
     sender_name = await _cname(message.from_user.id)
+    relay_kb = kb([
+        [("✅ به نتیجه رسیدیم", f"g|negok|{neg_id}"),
+         ("❌ به نتیجه نرسیدم", f"g|negno|{neg_id}")],
+    ])
+    # فرستنده هم پیام خود را به‌صورت پیام ربات می‌بیند تا در بخش مذاکره نمایان شود
+    try:
+        await dm(message.bot, message.from_user.id,
+                 f"🕊 <b>مذاکره</b> — از {sender_name}:\n\n{text}", reply_markup=relay_kb)
+    except Exception:
+        pass
     for m in members:
         try:
             await dm(message.bot, 
                 m["user_id"],
                 f"🕊 <b>مذاکره</b> — از {sender_name}:\n\n{text}",
-                reply_markup=kb([
-                    [("✅ به نتیجه رسیدیم", f"g|negok|{neg_id}"),
-                     ("❌ به نتیجه نرسیدم", f"g|negno|{neg_id}")],
-                ]))
+                reply_markup=relay_kb)
         except Exception:
             pass
 
@@ -791,6 +804,8 @@ async def direct_trade_menu(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("g|dtrp|"))
 async def dt_pick_give(call: CallbackQuery, state: FSMContext):
     partner = int(call.data.split("|")[2])
+    if await at_war(call.from_user.id, partner):
+        return await call.answer("⚔️ در حال جنگ با این کشور هستید — فقط مذاکره مجاز است!", show_alert=True)
     await state.update_data(partner=partner, give=None, want=None)
     await call.answer()
     await call.message.edit_text(
@@ -913,6 +928,8 @@ async def dt_send(call: CallbackQuery, state: FSMContext):
     partner = d.get("partner")
     if not partner or not d.get("give_qty") or not d.get("want_qty"):
         return await call.answer("اطلاعات ناقص است — از ابتدا شروع کنید", show_alert=True)
+    if await at_war(call.from_user.id, partner):
+        return await call.answer("⚔️ در حال جنگ با این کشور هستید — فقط مذاکره مجاز است!", show_alert=True)
     value = (await _value_of(d["give_type"], d.get("give_id", 0), d["give_qty"])
              + await _value_of(d["want_type"], d.get("want_id", 0), d["want_qty"]))
     tid = await db.execute(
@@ -942,6 +959,9 @@ async def dt_accept(call: CallbackQuery):
     t = await db.fetchone("SELECT * FROM direct_trades WHERE id=? AND status='pending'", (tid,))
     if not t or t["to_id"] != call.from_user.id:
         return await call.answer("پیشنهاد یافت نشد", show_alert=True)
+    if await at_war(t["from_id"], t["to_id"]):
+        await db.execute("UPDATE direct_trades SET status='declined' WHERE id=?", (tid,))
+        return await call.answer("⚔️ در حال جنگ با این کشور هستید — فقط مذاکره مجاز است!", show_alert=True)
     # اعتبارسنجی دوطرفه
     if not await _has_amount(t["from_id"], t["give_type"], t["give_id"], t["give_qty"]):
         await db.execute("UPDATE direct_trades SET status='failed' WHERE id=?", (tid,))

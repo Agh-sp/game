@@ -98,7 +98,8 @@ async def government_confirm(call: CallbackQuery):
     country = await get_country(call.from_user.id)
     await call.answer("✅ حکومت تغییر کرد")
     if country:
-        from core.economy import announce
-        await announce(call.bot,
-                       f"{country['flag']}{g['flag']} کشور {country['name']} حکومت خود را به «{g['name']}» تغییر داد!")
+        from core.images import announce_img
+        await announce_img(call.bot,
+                           f"{country['flag']}{g['flag']} کشور {country['name']} حکومت خود را به «{g['name']}» تغییر داد!",
+                           "general")
     await gov_menu(call)

@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from core.db import db, get_setting
 from core.economy import (announce, bump_progress, get_country,
                           is_jammed, veto_users)
+from core.images import announce_img
 from core.utils import fmt, jloads, hours_left, fmt_hm, iso, add_hours
 from gamebot.common import back_row, kb, send_home
 from gamebot.handlers.war import settle_votes
@@ -178,10 +179,10 @@ async def sanction_create(message: Message, state: FSMContext):
     await db.execute(
         "INSERT INTO un_votes(title, kind, subject_id, options, ends_at, created_by) VALUES(?,?,?,?,?,?)",
         (titles[kind], "sanction", target_id, '["موافق","مخالف"]', add_hours(hours), message.from_user.id))
-    await announce(message.bot,
-                   f"⚖️ سازمان ملل: درخواست تحریم «{titles[kind]}» توسط "
-                   f"{m_country['flag'] if m_country else ''} ثبت شد.\nدلیل: {reason}\n"
-                   "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.")
+    await announce_img(message.bot,
+                       f"⚖️ سازمان ملل: درخواست تحریم «{titles[kind]}» توسط "
+                       f"{m_country['flag'] if m_country else ''} ثبت شد.\nدلیل: {reason}\n"
+                       "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.", "general")
     await send_home(message, 
         f"✅ درخواست تحریم ثبت شد و در سازمان ملل و کانال اعلام شد.\n"
         f"⏳ پایان رای‌گیری: {fmt_hm(hours)} دیگر — نتیجه به‌طور خودکار اعمال می‌شود.")
@@ -249,7 +250,20 @@ async def statement_publish(call: CallbackQuery, state: FSMContext):
             f"🏛 حکومت: {gov['name'] if gov else '—'}\n\n\"{text}\"")
     await db.execute("INSERT INTO statements(user_id, text) VALUES(?,?)", (call.from_user.id, text))
     await bump_progress(call.from_user.id, "statements")
-    await announce(call.bot, full)
+    # 🏳 بیانیه همراه پرچم اصلی کشور — اول از کتابخانه تصاویر ادمین، و در صورت عدم وجود لینک واقعی FlagCDN
+    channel = await get_setting("announcement_channel", "")
+    from core.images import get_image
+    img = (await get_image(name=f"پرچم {country['name']}")
+           or await get_image("flag", f"flag_{country['id']}"))
+    flag_photo = (img["file_id"] if img and img["file_id"] else country.get("flag_url") or "")
+    if channel:
+        if flag_photo:
+            try:
+                await call.bot.send_photo(channel, flag_photo, caption=full[:1000])
+            except Exception:
+                await announce(call.bot, full)
+        else:
+            await announce(call.bot, full)
     await call.answer("📢 منتشر شد")
     await call.message.edit_text(full + "\n\n✅ بیانیه در کانال منتشر شد.")
 

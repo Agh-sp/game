@@ -5,8 +5,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from core.db import db
-from core.economy import (add_asset, assets_of, bump_progress, get_country,
-                          project_done, settle_trainings)
+from core.economy import (add_asset, assets_of, at_war, bump_progress,
+                          get_country, project_done, settle_trainings)
 from core.utils import fmt, hours_left, fmt_hm, iso, add_hours, clamp
 from gamebot.common import back_row, kb, send_home, dm
 
@@ -89,6 +89,8 @@ async def base_approve(call: CallbackQuery):
                           (bid, call.from_user.id))
     if not b:
         return await call.answer("درخواست یافت نشد", show_alert=True)
+    if await at_war(call.from_user.id, b["guest_id"]):
+        return await call.answer("⚔️ در حال جنگ با این کشور هستید — فقط مذاکره مجاز است!", show_alert=True)
     await db.execute("UPDATE bases SET status='active' WHERE id=?", (bid,))
     try:
         await dm(call.bot, b["guest_id"],
@@ -121,11 +123,21 @@ async def base_request_list(call: CallbackQuery):
         "SELECT c.*, u.full_name FROM countries c JOIN users u ON u.id=c.owner_id "
         "WHERE c.owner_id IS NOT NULL AND c.owner_id!=? ORDER BY c.name",
         (call.from_user.id,))
-    rows = [[(f"{c['flag']} {c['name']}", f"g|basereqr|{c['owner_id']}")] for c in countries]
+    rows = []
+    blocked = 0
+    for c in countries:
+        if await at_war(call.from_user.id, c["owner_id"]):
+            blocked += 1
+            continue  # کشورهای درگیر جنگ — درخواست پایگاه مسدود است
+        rows.append([(f"{c['flag']} {c['name']}", f"g|basereqr|{c['owner_id']}")])
     rows.append(back_row("g|base"))
+    note = ""
+    if blocked:
+        note = f"\n⚔️ {blocked} کشور درگیر جنگ با شما هستند — فقط با کشورهای درگیر جنگ مذاکره ممکن است.\n"
     await call.answer()
     await call.message.edit_text(
-        "🤝 <b>درخواست پایگاه نظامی</b>\n\nکشوری را برای مذاکره انتخاب کنید. اگر طرف مقابل تأیید کند، "
+        "🤝 <b>درخواست پایگاه نظامی</b>\n\n" + note +
+        "کشوری را برای مذاکره انتخاب کنید. اگر طرف مقابل تأیید کند، "
         "پایگاه شما در آن کشور ساخته می‌شود:\n"
         "• اگر به کشور میزبان حمله شود از آن دفاع می‌کنید\n"
         "• برای حمله زمینی از مرز آن کشور عبور می‌کنید",
@@ -136,6 +148,8 @@ async def base_request_list(call: CallbackQuery):
 @router.callback_query(F.data.startswith("g|basereqr|"))
 async def base_request_send(call: CallbackQuery):
     host_id = int(call.data.split("|")[2])
+    if await at_war(call.from_user.id, host_id):
+        return await call.answer("⚔️ در حال جنگ با این کشور هستید — فقط مذاکره مجاز است!", show_alert=True)
     exists = await db.fetchone(
         "SELECT id FROM bases WHERE guest_id=? AND host_id=? AND status IN ('pending','active')",
         (call.from_user.id, host_id))
@@ -166,10 +180,48 @@ async def barracks_menu(call: CallbackQuery):
         reply_markup=kb([
             [("📋 تجهیزات و سربازان من", "g|eq")],
             [("🛒 خرید تجهیزات", "g|eqshop")],
+            [("🕶 بخش سایبری", "g|cybsec")],
             [("🎓 تعلیم سرباز", "g|train")],
             back_row("g|army"),
         ]),
     )
+
+
+@router.callback_query(F.data == "g|cybsec")
+async def cyber_section_menu(call: CallbackQuery):
+    """🕶 بخش سایبری پادگان — خرید تجهیزات سایبری ( + هک با هوش مصنوعی با سکه شاهی )."""
+    cyber_cat = await db.fetchone("SELECT * FROM equipment_categories WHERE key='cyber'")
+    if not cyber_cat:
+        return await call.answer("دسته‌بندی سایبری یافت نشد", show_alert=True)
+    items = await db.fetchall(
+        "SELECT e.*, p.name AS req_name FROM equipment e "
+        "LEFT JOIN buildings p ON p.id=e.requires_project_id "
+        "WHERE e.category_id=? AND e.is_active=1 "
+        "ORDER BY e.price_coins DESC, e.price_money, e.id", (cyber_cat["id"],))
+    lines = [f"{cyber_cat['emoji']} <b>بخش سایبری پادگان</b>\n",
+             "خرید تجهیزات سایبری از اینجا انجام می‌شود — هر تجهیزاتی قدرت سایبری "
+             "🖥 شما را افزایش می‌دهد:\n"]
+    rows = []
+    for e in items:
+        if e["price_coins"]:
+            price = f"🪙 {fmt(e['price_coins'])} سکه شاهی"
+        else:
+            price = f"💰 {fmt(e['price_money'])}"
+        stats = []
+        if e["cyber_power"]:
+            stats.append(f"🖥 {fmt(e['cyber_power'])}")
+        if e["attack_power"]:
+            stats.append(f"⚔️ {fmt(e['attack_power'])}")
+        if e["defense_power"]:
+            stats.append(f"🛡 {fmt(e['defense_power'])}")
+        special = " ⭐ مهم" if "هک با هوش مصنوعی" in (e["name"] or "") else ""
+        req = f"\n   🔒 {e['requires_text']}" if e["requires_text"] else ""
+        lines.append(f"{e['emoji']} <b>{e['name']}</b>{special}: {price} — {' | '.join(stats)}{req}")
+        rows.append([(f"{e['emoji']} {e['name']}", f"g|eqbuy|{e['id']}")])
+    lines.append("\n💡 هرچه قدرت سایبری شما بالاتر باشد، شانس موفقیت عملیات سایبری در اتاق جنگ بیشتر است.")
+    rows.append(back_row("g|bar"))
+    await call.answer()
+    await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
 
 
 @router.callback_query(F.data == "g|eq")
@@ -374,19 +426,8 @@ async def eq_qty_input(message: Message, state: FSMContext):
     await add_asset(user["id"], "equipment", e["id"], qty)
     await bump_progress(user["id"], "bought", qty)
     price = f" + 🪙 {fmt(total_coins)} سکه" if total_coins else ""
-    await send_home(message, f"✅ <b>{fmt(qty)} × {e['name']}</b> به زرادخانه اضافه شد! (💰 {fmt(total_money)}{price})")
-    await barracks_menu(_FakeCall(message))
-
-
-class _FakeCall:
-    def __init__(self, message: Message):
-        self.message = message
-        self.from_user = message.from_user
-        self.bot = message.bot
-
-    async def answer(self, *_a, **_k):
-        pass
-
+    await send_home(message, f"✅ <b>{fmt(qty)} × {e['name']}</b> به زرادخانه اضافه شد! (💰 {fmt(total_money)}{price})\n"
+                                  "🔁 برای بازگشت به منو: 🪖 ارتش ← 🎖 پادگان")
 
 # ─── تعلیم سرباز ───
 
@@ -455,6 +496,6 @@ async def train_qty_input(message: Message, state: FSMContext):
     await bump_progress(user["id"], "trained", count)
     await send_home(message, 
         f"🎓 آموزش <b>{fmt(count)} × {t['name']}</b> آغاز شد!\n"
-        f"⏱ پایان: {fmt_hm(t['train_hours'])} دیگر\n💰 هزینه: {fmt(cost)}"
+        f"⏱ پایان: {fmt_hm(t['train_hours'])} دیگر\n💰 هزینه: {fmt(cost)}\n"
+        "🔁 برای بازگشت به منو: 🪖 ارتش ← 🎖 پادگان"
     )
-    await barracks_menu(_FakeCall(message))

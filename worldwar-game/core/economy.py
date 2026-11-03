@@ -274,6 +274,17 @@ async def is_disarmed(user_id: int) -> bool:
     return bool(state.get("disarmed_until") and state["disarmed_until"] > iso())
 
 
+async def at_war(user_id: int, other_id: int) -> bool:
+    """آیا دو کشور در جنگ فعال هستند؟"""
+    if not user_id or not other_id or user_id == other_id:
+        return False
+    row = await db.fetchone(
+        "SELECT id FROM wars WHERE status='active' AND "
+        "((attacker_id=? AND defender_id=?) OR (attacker_id=? AND defender_id=?))",
+        (user_id, other_id, other_id, user_id))
+    return row is not None
+
+
 # ─── پیشرفت روزانه ───
 
 

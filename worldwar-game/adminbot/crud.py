@@ -45,6 +45,26 @@ def kb(rows: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=clean_keyboard)
 
 
+def _btn_color(text: str, data: str) -> str:
+    """رنگ اینلاین دکمه بر اساس متن/کالبک — Telegram Bot API 7.0."""
+    t = (text or "")
+    d = (data or "")
+    if isinstance(d, str) and (d.startswith("http://") or d.startswith("https://") or d.startswith("tg://")):
+        return "white"
+    if t.startswith("❌") or any(k in t for k in ("انصراف", "لغو", "حذف", "cancel", "reject", "break")):
+        return "red"
+    if isinstance(d, str) and (d.startswith("g|cancel") or d.startswith("c|cancel") or
+                               d.startswith("a|imgdel") or d.startswith("a|del") or
+                               d.startswith("a|reset") or d.startswith("a|rm")):
+        return "red"
+    if t.startswith("✅") or any(k in t for k in ("تأیید", "تایید", "انتشار", "پذیرفت",
+                                                "confirm", "continue", "ادامه")):
+        return "green"
+    if "◀️" in t or "بازگشت" in t or t.startswith("🏠") or d in ("g|emp", "g|main", "g|home"):
+        return "white"
+    return "blue"
+
+
 def _make_btn(item: tuple) -> InlineKeyboardButton:
     text = item[0]
     data = item[1]
@@ -52,7 +72,8 @@ def _make_btn(item: tuple) -> InlineKeyboardButton:
         return InlineKeyboardButton(text=text, url=data)
     if isinstance(data, str) and (data.startswith("http://") or data.startswith("https://") or data.startswith("tg://")):
         return InlineKeyboardButton(text=text, url=data)
-    return InlineKeyboardButton(text=text, callback_data=str(data))
+    return InlineKeyboardButton(text=text, callback_data=str(data),
+                                color=_btn_color(text, data))
 
 
 def cd(*parts) -> str:

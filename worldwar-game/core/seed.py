@@ -114,6 +114,7 @@ EQUIPMENT = [
     # ── سایبری ──
     ("cyber", "malware", "کرم نفوذگر دیداس (پایه)", "👾", 0, 0, 25_000, 0, 10_000_000, 0, ""),
     ("cyber", "malware", "بدافزار تخریب صنعتی استاکس‌نت", "💻", 0, 0, 70_000, 0, 35_000_000, 0, ""),
+    ("cyber", "malware", "هک با هوش مصنوعی", "🧠", 0, 0, 500_000, 0, 0, 250, ""),
     ("cyber", "firewall", "سپر فایروال سایبری ملی (پایه)", "🛡️", 0, 0, 30_000, 0, 12_000_000, 0, ""),
     ("cyber", "firewall", "مرکز امنیت ابری و داده‌های ملی", "🗄️", 0, 0, 85_000, 0, 48_000_000, 0, ""),
     ("cyber", "ew", "سامانه اخلال راداری و ارتباطی (پایه)", "📡", 0, 0, 40_000, 0, 18_000_000, 0, ""),
@@ -325,21 +326,37 @@ async def run(db) -> None:
     # تجهیزات نظامی با زیردسته‌ها و مقادیر پایه
     cats = {r["key"]: r["id"] for r in await db.fetchall("SELECT id, key FROM equipment_categories")}
     eq_count = await _count(db, "equipment")
-    if eq_count == 0 or True:  # به‌روزرسانی برای اعمال زیردسته‌ها و تجهیزات پایه جدید
-        # بررسی نیاز به آپدیت یا سید
-        cols = [c["name"] for c in await db.fetchall("PRAGMA table_info(equipment)")]
-        if "subcategory" in cols:
-            await db.execute("DELETE FROM equipment")
-            for cat, subcat, name, emoji, atk, dfn, cyb, spd, money, coins, req in EQUIPMENT:
-                if cat in cats:
-                    await db.execute(
-                        "INSERT INTO equipment(category_id, subcategory, name, emoji, attack_power, defense_power, cyber_power, "
-                        "speed, price_money, price_coins, requires_text) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                        (cats[cat], subcat, name, emoji, atk, dfn, cyb, spd, money, coins, req),
-                    )
-            # پیش‌نیازهای پروژه‌ای تجهیزات
-            await _link_equipment_requirement(db, "زیردریایی هسته‌ای تهاجمی تایفون", "غنی‌سازی اورانیوم ۲۰٪")
-            await _link_equipment_requirement(db, "موشک بالستیک مداری از ماه", "شهر فضایی")
+    cols = [c["name"] for c in await db.fetchall("PRAGMA table_info(equipment)")]
+    if eq_count == 0 and "subcategory" in cols:
+        # سید کامل — فقط وقتی جدول تجهیزات خالی است
+        for cat, subcat, name, emoji, atk, dfn, cyb, spd, money, coins, req in EQUIPMENT:
+            if cat in cats:
+                await db.execute(
+                    "INSERT INTO equipment(category_id, subcategory, name, emoji, attack_power, defense_power, cyber_power, "
+                    "speed, price_money, price_coins, requires_text) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (cats[cat], subcat, name, emoji, atk, dfn, cyb, spd, money, coins, req),
+                )
+    else:
+        # به‌روزرسانی غیرمخرب: تجهیزات موجود (و دارایی‌های بازیکنان) حفظ می‌شوند؛
+        # فقط تجهیزات جدید اضافه و مقادیر پایه به‌روز می‌شوند.
+        for cat, subcat, name, emoji, atk, dfn, cyb, spd, money, coins, req in EQUIPMENT:
+            if cat not in cats:
+                continue
+            exists = await db.fetchone("SELECT id FROM equipment WHERE name=?", (name,))
+            if exists:
+                await db.execute(
+                    "UPDATE equipment SET subcategory=?, emoji=?, attack_power=?, defense_power=?, cyber_power=?, "
+                    "speed=?, price_money=?, price_coins=?, requires_text=? WHERE id=?",
+                    (subcat, emoji, atk, dfn, cyb, spd, money, coins, req, exists["id"]))
+            else:
+                await db.execute(
+                    "INSERT INTO equipment(category_id, subcategory, name, emoji, attack_power, defense_power, cyber_power, "
+                    "speed, price_money, price_coins, requires_text) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (cats[cat], subcat, name, emoji, atk, dfn, cyb, spd, money, coins, req),
+                )
+    # پیش‌نیازهای پروژه‌ای تجهیزات (فقط در صورت وجود)
+    await _link_equipment_requirement(db, "زیردریایی هسته‌ای تهاجمی تایفون", "غنی‌سازی اورانیوم ۲۰٪")
+    await _link_equipment_requirement(db, "موشک بالستیک مداری از ماه", "شهر فضایی")
 
     # به‌روزرسانی زمان تعلیم سربازان
     for name, emoji, power, cyb, cost, hours in SOLDIER_TYPES:
