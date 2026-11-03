@@ -1,0 +1,8 @@
+{
+  "name": "Remix Remix World War Telegram Game \u0026 Command Center",
+  "description": "پلتفرم مدیریت و ربات پیشرفته بازی جنگ جهانی تلگرام با پایگاه داده و کنترل پنل فرماندهی",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

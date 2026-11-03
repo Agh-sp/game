@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Remix Remix World War Telegram Game &amp; Command Center</title>
+    <meta name="description" content="پلتفرم مدیریت و ربات پیشرفته بازی جنگ جهانی تلگرام با پایگاه داده و کنترل پنل فرماندهی" />
+    <meta property="og:title" content="Remix Remix World War Telegram Game &amp; Command Center" />
+    <meta property="og:description" content="پلتفرم مدیریت و ربات پیشرفته بازی جنگ جهانی تلگرام با پایگاه داده و کنترل پنل فرماندهی" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function() {
+        var isViteWsError = function(msg) {
+          if (!msg) return false;
+          var s = String(msg).toLowerCase();
+          return s.indexOf('websocket') !== -1 || s.indexOf('[vite]') !== -1;
+        };
+
+        var origError = console.error;
+        console.error = function() {
+          if (arguments.length > 0 && isViteWsError(arguments[0])) {
+            return;
+          }
+          return origError.apply(console, arguments);
+        };
+
+        window.addEventListener('error', function(e) {
+          if (isViteWsError(e.message) || (e.error && isViteWsError(e.error.message))) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          if (e.reason && isViteWsError(e.reason.message || e.reason)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
