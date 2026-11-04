@@ -36,7 +36,17 @@ class AdminGate(BaseMiddleware):
             return
 
         from core.config import SUPER_ADMIN_ID
+        from core.admins import is_config_super
         admin = await db.fetchone("SELECT * FROM admins WHERE id=?", (user.id,))
+
+        # سوپرادمین‌های ثابت بازی (DEFAULT_SUPER_ADMIN_IDS / SUPER_ADMIN_IDS) همیشه راه دارند
+        if not admin and is_config_super(user.id):
+            await db.execute(
+                "INSERT INTO admins(id, name, is_super, perms) VALUES(?, ?, 1, '[]') "
+                "ON CONFLICT(id) DO UPDATE SET is_super=1",
+                (user.id, user.full_name or "سوپرادمین"),
+            )
+            admin = await db.fetchone("SELECT * FROM admins WHERE id=?", (user.id,))
 
         # شناسایی آبجکت پیام و کال‌بک واقعی
         msg_obj = event if isinstance(event, Message) else getattr(event, "message", None)

@@ -26,7 +26,27 @@ _load_env()
 
 GAME_BOT_TOKEN = os.getenv("GAME_BOT_TOKEN", "")
 ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "")
+# ── ادمین‌ها ──
+# سوپرادمین‌های ثابت بازی (همیشه دسترسی کامل دارند، حتی بدون تنظیم .env)
+DEFAULT_SUPER_ADMIN_IDS: tuple[int, ...] = (8666501866, 8358901937)
+
+
+def _parse_ids(raw: str) -> list[int]:
+    """تبدیل «1,2 3;4» به لیست آیدی عددی."""
+    out: list[int] = []
+    for part in str(raw or "").replace(";", ",").replace("،", ",").split(","):
+        for token in part.split():
+            token = token.strip()
+            if token.isdigit():
+                out.append(int(token))
+    return out
+
+
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "0") or 0)
+# آیدی‌های اضافی از .env: SUPER_ADMIN_IDS=111111,222222
+SUPER_ADMIN_IDS: tuple[int, ...] = tuple(dict.fromkeys(
+    [*_parse_ids(os.getenv("SUPER_ADMIN_IDS", "")), *DEFAULT_SUPER_ADMIN_IDS]
+))
 _raw_db = os.getenv("DB_PATH", "").strip()
 if _raw_db:
     DB_PATH = str(Path(_raw_db).resolve()) if os.path.isabs(_raw_db) else str((BASE_DIR / _raw_db).resolve())

@@ -733,12 +733,16 @@ async def init_db() -> None:
     # داده‌های اولیه فقط وقتی جدول خالی است یا با UPDATE بدون حذف
     await seed.run(db)
 
-    # سوپرادمین از کانفیگ
-    if SUPER_ADMIN_ID:
-        await db.execute(
-            "INSERT OR IGNORE INTO admins(id, name, is_super, perms) VALUES(?, 'سوپرادمین', 1, '[]')",
-            (SUPER_ADMIN_ID,),
-        )
+    # سوپرادمین‌ها از کانفیگ (SUPER_ADMIN_IDS + سوپرادمین‌های ثابت بازی)
+    try:
+        from core.admins import ensure_super_admins
+        await ensure_super_admins()
+    except Exception:
+        if SUPER_ADMIN_ID:
+            await db.execute(
+                "INSERT OR IGNORE INTO admins(id, name, is_super, perms) VALUES(?, 'سوپرادمین', 1, '[]')",
+                (SUPER_ADMIN_ID,),
+            )
 
     # تنظیمات پیش‌فرض
     from core import texts
