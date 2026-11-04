@@ -19,6 +19,199 @@ const isProd = process.env.NODE_ENV === 'production';
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 const WW_DIR = path.resolve(__dirname, 'worldwar-game');
+
+// ─── پینگ بیدارباش (Keep-alive) ───
+// هر KEEPALIVE_MINUTES دقیقه یک درخواست فیک به آدرس Web App زده می‌شود تا سرویس خواب نرود.
+const KEEPALIVE_INTERVAL_MINUTES = Math.max(1, parseInt(process.env.KEEPALIVE_MINUTES || '10', 10) || 10);
+const KEEPALIVE_DISABLED = ['0', 'false', 'no', 'off'].includes(String(process.env.KEEPALIVE ?? '1').toLowerCase());
+const EXTERNAL_WEBAPP_URL = (process.env.WEBAPP_URL || process.env.PUBLIC_URL || process.env.SELF_URL || '')
+  .trim()
+  .replace(/\/+$/, '');
+let learnedBaseUrl = '';
+
+interface SelfPingState {
+  enabled: boolean;
+  intervalMinutes: number;
+  target: string;
+  count: number;
+  lastPingAt: string | null;
+  lastStatus: number | null;
+  lastError: string;
+  lastTrigger: string;
+}
+const selfPingState: SelfPingState = {
+  enabled: !KEEPALIVE_DISABLED,
+  intervalMinutes: KEEPALIVE_INTERVAL_MINUTES,
+  target: EXTERNAL_WEBAPP_URL,
+  count: 0,
+  lastPingAt: null,
+  lastStatus: null,
+  lastError: '',
+  lastTrigger: '',
+};
+let keepaliveTimer: NodeJS.Timeout | null = null;
+
+// ─── وضعیت وبهوک ───
+const WEBHOOK_PORT = parseInt(process.env.WEBHOOK_PORT || '8080', 10);
+const WEBHOOK_PY_URL = `http://127.0.0.1:${WEBHOOK_PORT}`;
+const WEBHOOK_MODES = ['1', 'true', 'yes'];
+let BOT_WEBHOOK_MODE = WEBHOOK_MODES.includes(String(process.env.WEBHOOK_MODE ?? process.env.WEBHOOK_ENABLED ?? '0').toLowerCase());
+interface WebhookStat { hits: number; relayed: number; lastHitAt: string | null; lastStatus: number | null; lastError: string }
+const webhookStats: Record<'game' | 'admin', WebhookStat> = {
+  game: { hits: 0, relayed: 0, lastHitAt: null, lastStatus: null, lastError: '' },
+  admin: { hits: 0, relayed: 0, lastHitAt: null, lastStatus: null, lastError: '' },
+};
+
+function resolveSelfUrl(): string {
+  const explicit = EXTERNAL_WEBAPP_URL || learnedBaseUrl;
+  if (explicit) return explicit;
+  return `http://127.0.0.1:${PORT}`;
+}
+
+async function selfPing(trigger: string = 'interval'): Promise<SelfPingState> {
+  const target = `${resolveSelfUrl()}/health`;
+  selfPingState.target = resolveSelfUrl();
+  selfPingState.lastTrigger = trigger;
+  selfPingState.count += 1;
+  selfPingState.lastPingAt = new Date().toISOString();
+  try {
+    const res = await fetch(target, {
+      method: 'GET',
+      headers: { 'x-keepalive': '1', 'user-agent': 'wwgame-keepalive/1.0' },
+      signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
+    });
+    selfPingState.lastStatus = res.status;
+    selfPingState.lastError = res.ok ? '' : `HTTP ${res.status}`;
+    if (trigger !== 'interval') console.log(`[KeepAlive] ping ${target} → ${res.status}`);
+  } catch (err: any) {
+    selfPingState.lastStatus = 0;
+    selfPingState.lastError = err?.message || 'network error';
+    console.warn(`[KeepAlive] ping failed (${target}): ${selfPingState.lastError}`);
+  }
+  return selfPingState;
+}
+
+function startKeepAlive(): void {
+  if (keepaliveTimer) clearInterval(keepaliveTimer);
+  if (!selfPingState.enabled) {
+    console.log('[KeepAlive] disabled (KEEPALIVE=0)');
+    return;
+  }
+  const everyMs = selfPingState.intervalMinutes * 60 * 1000;
+  keepaliveTimer = setInterval(() => { void selfPing('interval'); }, everyMs);
+  if ((keepaliveTimer as any).unref) (keepaliveTimer as any).unref();
+  // اولین پینگ ۱۵ ثانیه بعد از بالا آمدن، تا سرور کامل آماده شود
+  setTimeout(() => { void selfPing('startup'); }, 15000);
+  console.log(`[KeepAlive] هر ${selfPingState.intervalMinutes} دقیقه ${resolveSelfUrl()}/health پینگ می‌شود`);
+}
+
+let botPidCache: { pid: number | null; at: number } = { pid: null, at: 0 };
+
+async function healthPayload() {
+  const now = Date.now();
+  if (now - botPidCache.at > 5000) {
+    botPidCache = { pid: await getBotPid(), at: now };
+  }
+  const pid = botPidCache.pid;
+  return {
+    status: 'ok',
+    service: 'worldwar-command-center',
+    mode: BOT_WEBHOOK_MODE ? 'webhook' : 'polling',
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    botRunning: Boolean(pid),
+    botPid: pid,
+    watchdog: !isIntentionalStop,
+    keepalive: { ...selfPingState, target: selfPingState.target || resolveSelfUrl(), resolvedTarget: resolveSelfUrl() },
+    webhook: {
+      enabled: BOT_WEBHOOK_MODE,
+      pythonService: WEBHOOK_PY_URL,
+      paths: { game: '/webhook/game', admin: '/webhook/admin' },
+      stats: webhookStats,
+    },
+  };
+}
+
+async function relayWebhook(kind: 'game' | 'admin', req: any, res: any) {
+  const stat = webhookStats[kind];
+  stat.hits += 1;
+  stat.lastHitAt = new Date().toISOString();
+  const secret = req.headers['x-telegram-bot-api-secret-token'];
+  try {
+    const upstream = await fetch(`${WEBHOOK_PY_URL}/webhook/${kind}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(secret ? { 'X-Telegram-Bot-Api-Secret-Token': String(secret) } : {}),
+      },
+      body: JSON.stringify(req.body ?? {}),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined,
+    });
+    stat.relayed += 1;
+    stat.lastStatus = upstream.status;
+    stat.lastError = '';
+    // همیشه ۲۰۰ برمی‌گردانیم تا تلگرام آپدیت را دوباره نفرستد
+    res.status(200).json({ ok: true, relayed: true, upstreamStatus: upstream.status });
+  } catch (err: any) {
+    stat.lastStatus = 0;
+    stat.lastError = err?.message || 'python webhook service unreachable';
+    console.warn(`[Webhook] ${kind} relay failed: ${stat.lastError}`);
+    res.status(200).json({
+      ok: true,
+      relayed: false,
+      warning: 'سرویس وبهوک پایتون در دسترس نیست — ربات‌ها در حالت polling کار می‌کنند',
+      error: stat.lastError,
+    });
+  }
+}
+
+async function telegramApi(token: string, method: string, payload: any = {}) {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { ok: false, description: err?.message || 'network error' };
+  }
+}
+
+async function webhookStatusPayload() {
+  const envVars = parseEnvFile(WW_ENV_PATH);
+  const tokens = {
+    game: envVars.GAME_BOT_TOKEN || process.env.GAME_BOT_TOKEN || '',
+    admin: envVars.ADMIN_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN || '',
+  };
+  const info: Record<string, any> = {};
+  for (const kind of ['game', 'admin'] as const) {
+    if (!tokens[kind]) { info[kind] = { configured: false }; continue; }
+    const tg = await telegramApi(tokens[kind], 'getWebhookInfo');
+    info[kind] = {
+      configured: true,
+      ok: Boolean(tg.ok),
+      url: tg.result?.url || '',
+      pendingUpdates: tg.result?.pending_update_count ?? null,
+      lastError: tg.result?.last_error_message || null,
+      lastErrorAt: tg.result?.last_error_date ? new Date(tg.result.last_error_date * 1000).toISOString() : null,
+    };
+  }
+  let pythonService = false;
+  try {
+    const r = await fetch(`${WEBHOOK_PY_URL}/health`, { signal: AbortSignal.timeout ? AbortSignal.timeout(3000) : undefined });
+    pythonService = r.ok;
+  } catch { pythonService = false; }
+  return {
+    mode: BOT_WEBHOOK_MODE ? 'webhook' : 'polling',
+    baseUrl: EXTERNAL_WEBAPP_URL || learnedBaseUrl || null,
+    relay: { pythonService, target: WEBHOOK_PY_URL, paths: { game: '/webhook/game', admin: '/webhook/admin' }, stats: webhookStats },
+    telegram: info,
+    keepalive: { ...selfPingState },
+  };
+}
+
 const WW_ENV_PATH = path.resolve(WW_DIR, '.env');
 const BOT_LOG_PATH = '/tmp/bot.log';
 
@@ -44,7 +237,7 @@ function startWatchdog() {
 
 async function getBotPid(): Promise<number | null> {
   try {
-    const { stdout } = await execAsync("pgrep -f 'run_all.py'");
+    const { stdout } = await execAsync("pgrep -f 'run_(all|webhook)\\.py'");
     const pids = stdout.trim().split('\n').map(p => parseInt(p, 10)).filter(p => Boolean(p) && p !== process.pid);
     return pids.length > 0 ? pids[0] : null;
   } catch (_) {
@@ -66,7 +259,8 @@ function startBotProcess(): number | null {
   try {
     const envVars = parseEnvFile(WW_ENV_PATH);
     const logFd = fs.openSync(BOT_LOG_PATH, 'a');
-    const child = spawn('python3', ['-u', 'run_all.py'], {
+    const script = BOT_WEBHOOK_MODE ? 'run_webhook.py' : 'run_all.py';
+    const child = spawn('python3', ['-u', script], {
       cwd: WW_DIR,
       env: { ...process.env, ...envVars, PYTHONPATH: '.' },
       detached: true,
@@ -122,6 +316,13 @@ function writeEnvFile(filePath: string, data: Record<string, string>) {
   if (data.FIREBASE_AUTH) {
     lines.push(`FIREBASE_AUTH=${data.FIREBASE_AUTH}`);
   }
+  lines.push('');
+  lines.push('# ─── وبهوک تلگرام و پینگ بیدارباش ───');
+  lines.push(`WEBHOOK_MODE=${data.WEBHOOK_MODE || '0'}`);
+  lines.push(`WEBHOOK_BASE_URL=${data.WEBHOOK_BASE_URL || ''}`);
+  lines.push(`WEBHOOK_PORT=${data.WEBHOOK_PORT || '8080'}`);
+  lines.push(`WEBHOOK_SECRET=${data.WEBHOOK_SECRET || ''}`);
+  lines.push(`KEEPALIVE_MINUTES=${data.KEEPALIVE_MINUTES || '10'}`);
   fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8');
 }
 
@@ -152,10 +353,23 @@ async function checkTelegramToken(token: string) {
 async function startServer() {
   const app = express();
   app.use(express.json());
+  // آدرس عمومی سرویس را از درخواست‌های ورودی یاد می‌گیریم تا پینگ بیدارباش به همان Web App برود
+  app.use((req, _res, next) => {
+    if (!learnedBaseUrl) {
+      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
+      const proto = (req.headers['x-forwarded-proto'] as string) || (req as any).protocol || 'http';
+      if (host) learnedBaseUrl = `${String(proto).split(',')[0]}://${String(host).split(',')[0]}`;
+    }
+    next();
+  });
 
   // API Routes
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  app.get('/api/health', async (req, res) => {
+    try {
+      res.json(await healthPayload());
+    } catch (err: any) {
+      res.status(500).json({ status: 'error', error: err.message });
+    }
   });
 
   // Get current secrets & live status
@@ -331,20 +545,150 @@ async function startServer() {
       }
     });
 
-    // Health & Uptime Ping endpoints
+    // Health & Uptime Ping endpoints — برای مانیتورینگ و پینگ بیدارباش
     app.get('/health', async (req, res) => {
-      const pid = await getBotPid();
-      res.json({
-        status: 'ok',
-        uptime: Math.floor(process.uptime()),
-        botRunning: Boolean(pid),
-        botPid: pid,
-        timestamp: new Date().toISOString()
-      });
+      try {
+        res.json(await healthPayload());
+      } catch (err: any) {
+        res.status(500).json({ status: 'error', error: err.message });
+      }
     });
 
-    app.get('/api/health', (req, res) => {
-      res.redirect('/health');
+    app.head('/health', async (req, res) => {
+      try {
+        res.status(200).json(await healthPayload());
+      } catch {
+        res.status(500).end();
+      }
+    });
+
+    app.get('/api/health', async (req, res) => {
+      try {
+        res.json(await healthPayload());
+      } catch (err: any) {
+        res.status(500).json({ status: 'error', error: err.message });
+      }
+    });
+
+    // ─── پینگ بیدارباش: وضعیت، اجرای دستی و تغییر بازه ───
+    app.get('/api/keepalive', (req, res) => {
+      res.json({ ...selfPingState, target: resolveSelfUrl(), external: Boolean(EXTERNAL_WEBAPP_URL) });
+    });
+
+    app.post('/api/keepalive/ping', async (req, res) => {
+      const state = await selfPing('manual');
+      res.json({ success: state.lastStatus === 200, ...state });
+    });
+
+    app.post('/api/keepalive', (req, res) => {
+      const { enabled, intervalMinutes } = req.body || {};
+      if (typeof enabled === 'boolean') selfPingState.enabled = enabled;
+      const minutes = parseInt(String(intervalMinutes ?? selfPingState.intervalMinutes), 10);
+      if (Number.isFinite(minutes) && minutes >= 1) selfPingState.intervalMinutes = minutes;
+      startKeepAlive();
+      res.json({ success: true, ...selfPingState, target: resolveSelfUrl() });
+    });
+
+    // ─── سیستم وبهوک تلگرام ───
+    // تلگرام آپدیت‌ها را به این مسیرها POST می‌کند؛ در صورت فعال بودن سرویس پایتون،
+    // به run_webhook.py (پورت WEBHOOK_PORT) پاس داده می‌شوند.
+    app.post('/webhook/game', (req, res) => { void relayWebhook('game', req, res); });
+    app.post('/webhook/admin', (req, res) => { void relayWebhook('admin', req, res); });
+
+    app.get('/api/webhook/status', async (req, res) => {
+      try {
+        res.json(await webhookStatusPayload());
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.post('/api/webhook/set', async (req, res) => {
+      const base = String(req.body?.baseUrl || EXTERNAL_WEBAPP_URL || learnedBaseUrl || '').replace(/\/+$/, '');
+      if (!base) {
+        return res.status(400).json({ success: false, error: 'آدرس عمومی مشخص نیست — baseUrl یا WEBHOOK_BASE_URL را تنظیم کنید' });
+      }
+      const envVars = parseEnvFile(WW_ENV_PATH);
+      const tokens = {
+        game: envVars.GAME_BOT_TOKEN || process.env.GAME_BOT_TOKEN || '',
+        admin: envVars.ADMIN_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN || '',
+      };
+      const secret = envVars.WEBHOOK_SECRET || process.env.WEBHOOK_SECRET || '';
+      const results: Record<string, any> = {};
+      for (const kind of ['game', 'admin'] as const) {
+        if (!tokens[kind]) { results[kind] = { ok: false, error: 'توکن تنظیم نشده' }; continue; }
+        const url = `${base}/webhook/${kind}`;
+        const tg = await telegramApi(tokens[kind], 'setWebhook', {
+          url,
+          ...(secret ? { secret_token: secret } : {}),
+          drop_pending_updates: false,
+          allowed_updates: ['message', 'callback_query', 'inline_query', 'channel_post', 'chat_member', 'my_chat_member'],
+        });
+        results[kind] = { ok: Boolean(tg.ok), url, description: tg.description };
+      }
+      learnedBaseUrl = base;
+      res.json({ success: Object.values(results).some((r: any) => r.ok), baseUrl: base, results });
+    });
+
+    // تغییر حالت اجرای ربات‌ها (polling ↔ webhook) + ری‌استارت خودکار
+    app.post('/api/webhook/mode', async (req, res) => {
+      const mode = String(req.body?.mode || '').toLowerCase();
+      if (!['webhook', 'polling'].includes(mode)) {
+        return res.status(400).json({ success: false, error: "mode باید 'webhook' یا 'polling' باشد" });
+      }
+      const wantWebhook = mode === 'webhook';
+      const current = parseEnvFile(WW_ENV_PATH);
+      current.WEBHOOK_MODE = wantWebhook ? '1' : '0';
+      if (req.body?.baseUrl) current.WEBHOOK_BASE_URL = String(req.body.baseUrl).replace(/\/+$/, '');
+      if (req.body?.secret) current.WEBHOOK_SECRET = String(req.body.secret);
+      writeEnvFile(WW_ENV_PATH, current);
+      BOT_WEBHOOK_MODE = wantWebhook;
+
+      // ثبت یا حذف وبهوک در تلگرام
+      const base = String(req.body?.baseUrl || current.WEBHOOK_BASE_URL || EXTERNAL_WEBAPP_URL || learnedBaseUrl || '').replace(/\/+$/, '');
+      const tokens = {
+        game: current.GAME_BOT_TOKEN || process.env.GAME_BOT_TOKEN || '',
+        admin: current.ADMIN_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN || '',
+      };
+      const webhookResults: Record<string, any> = {};
+      for (const kind of ['game', 'admin'] as const) {
+        if (!tokens[kind]) continue;
+        if (wantWebhook) {
+          if (!base) { webhookResults[kind] = { ok: false, error: 'baseUrl لازم است' }; continue; }
+          const tg = await telegramApi(tokens[kind], 'setWebhook', {
+            url: `${base}/webhook/${kind}`,
+            ...(current.WEBHOOK_SECRET ? { secret_token: current.WEBHOOK_SECRET } : {}),
+            drop_pending_updates: false,
+            allowed_updates: ['message', 'callback_query', 'inline_query', 'channel_post', 'chat_member', 'my_chat_member'],
+          });
+          webhookResults[kind] = { ok: Boolean(tg.ok), url: `${base}/webhook/${kind}` };
+        } else {
+          const tg = await telegramApi(tokens[kind], 'deleteWebhook', { drop_pending_updates: false });
+          webhookResults[kind] = { ok: Boolean(tg.ok) };
+        }
+      }
+
+      // ری‌استارت ربات با اسکریپت مناسب حالت جدید
+      isIntentionalStop = false;
+      await stopBotProcess();
+      await new Promise(r => setTimeout(r, 800));
+      const pid = startBotProcess();
+      res.json({ success: true, mode, pid, webhook: webhookResults });
+    });
+
+    app.post('/api/webhook/delete', async (req, res) => {
+      const envVars = parseEnvFile(WW_ENV_PATH);
+      const tokens = {
+        game: envVars.GAME_BOT_TOKEN || process.env.GAME_BOT_TOKEN || '',
+        admin: envVars.ADMIN_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN || '',
+      };
+      const results: Record<string, any> = {};
+      for (const kind of ['game', 'admin'] as const) {
+        if (!tokens[kind]) { results[kind] = { ok: false, error: 'توکن تنظیم نشده' }; continue; }
+        const tg = await telegramApi(tokens[kind], 'deleteWebhook', { drop_pending_updates: false });
+        results[kind] = { ok: Boolean(tg.ok), description: tg.description };
+      }
+      res.json({ success: Object.values(results).some((r: any) => r.ok), results });
     });
 
     // Bot process control endpoints
@@ -699,6 +1043,8 @@ async function startServer() {
     }
     // Launch watchdog supervisor to auto-restart bot if it ever halts
     startWatchdog();
+    // پینگ بیدارباش هر ۱۰ دقیقه به آدرس Web App تا سرویس خواب نرود
+    startKeepAlive();
   });
 
   // Handle WebSocket upgrades gracefully so Vite HMR or ping never throws "closed without opened"

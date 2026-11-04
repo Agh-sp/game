@@ -44,6 +44,9 @@ async def poll_with_retry(dp, bot, name: str):
 
 async def run_all() -> None:
     await init_db()
+    # پینگ بیدارباش: هر ۱۰ دقیقه یک درخواست فیک به Web App تا سرویس خواب نرود
+    from core.keepalive import start_keepalive
+    keepalive_task = start_keepalive()
     bots = []
     dps = []
     tasks = []
@@ -76,6 +79,8 @@ async def run_all() -> None:
                 pass
         for t in tasks:
             t.cancel()
+        if keepalive_task:
+            keepalive_task.cancel()
         for b in bots:
             try:
                 await b.session.close()

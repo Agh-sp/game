@@ -198,5 +198,32 @@ FIREBASE_AUTH=your-database-secret-or-token
 - 🎯 **لیست اهداف جنگ/سایبری/سازمان ملل/پایگاه** بر اساس «کشور ثبت‌شده روی کاربر» ساخته می‌شود، نه فقط `countries.owner_id`؛ کشورهایی مثل روسیه و ژاپن که owner_id آن‌ها خالی مانده بود حالا در لیست هستند و حمله به آن‌ها ممکن است. تابع `sync_country_owners()` هنگام هر راه‌اندازی مالکیت‌های دوگانه/ناقص را هم اصلاح می‌کند.
 - 💰 **مالیات میلیونی و وابسته به جمعیت و رضایت**: درآمد روزانه = (جمعیت ÷ ۱۰۰۰) × ضریب درآمد × (۰٫۵ + رضایت÷۱۰۰) × (۱ + نرخ مالیات)؛ همه مبالغ در کل بازی با فرمت «۱۲٫۵ میلیون / ۱٫۲ میلیارد» نمایش داده می‌شوند و پیام دوره‌ای هم درآمد دوره و هم درآمد روزانه را نشان می‌دهد.
 
+### 🌐 وبهوک، /health و پینگ بیدارباش
+
+ربات‌ها به‌صورت پیش‌فرض در حالت **polling** اجرا می‌شوند. برای اجرای پایدار روی سرور عمومی، حالت **Webhook** هم آماده است:
+
+| مسیر | کار |
+|---|---|
+| `GET /health` (و `HEAD`) | وضعیت سرویس: uptime، ربات‌ها، وبهوک، پینگ، دیتابیس |
+| `POST /webhook/game` | دریافت آپدیت‌های ربات بازی از تلگرام |
+| `POST /webhook/admin` | دریافت آپدیت‌های ربات ادمین |
+| `GET /webhook/info` | اطلاعات وبهوک هر دو ربات (`getWebhookInfo`) |
+| `POST /webhook/set` | ثبت وبهوک روی `WEBHOOK_BASE_URL` |
+| `POST /webhook/delete` | حذف وبهوک و بازگشت به polling |
+
+اجرا:
+
+```bash
+python3 run_webhook.py                          # سرویس وبهوک + /health روی WEBHOOK_PORT (پیش‌فرض 8080)
+python3 run_webhook.py --set-webhook https://my.app
+python3 run_webhook.py --info
+python3 run_webhook.py --delete-webhook
+```
+
+- 🔐 اگر `WEBHOOK_SECRET` تنظیم شود، هر درخواست باید هدر `X-Telegram-Bot-Api-Secret-Token` درست داشته باشد وگرنه `403` می‌گیرد.
+- ♻️ در این حالت هوک‌های startup (زمان‌بند درآمد، رأی‌گیری و…) هم اجرا می‌شوند؛ یعنی همه‌چیز مثل polling کار می‌کند.
+- 💓 **پینگ بیدارباش**: سرویس Node هر `KEEPALIVE_MINUTES` (پیش‌فرض **۱۰ دقیقه**) یک درخواست فیک به `${WEBAPP_URL یا آدرس عمومی}/health` می‌زند تا سرویس خواب نرود. وضعیتش در `/health` و `/api/keepalive` دیده می‌شود.
+- 🎛 از پنل وب: `GET /api/keepalive`، `POST /api/keepalive/ping`، `POST /api/keepalive {enabled, intervalMinutes}`، `GET /api/webhook/status`، `POST /api/webhook/set {baseUrl}`، `POST /api/webhook/delete`، `POST /api/webhook/mode {mode:"webhook"|"polling", baseUrl}`.
+
 ### 🧪 تست‌ها
-تست‌های خودکار بدون نیاز به توکن تلگرام در `worldwar-game/tests/` هستند (`smoke.py`، `test_new_features.py`، `test_regression.py`) — راهنما در `tests/README.md`.
+تست‌های خودکار بدون نیاز به توکن تلگرام در `worldwar-game/tests/` هستند (`smoke.py`، `test_new_features.py`، `test_regression.py`، `test_webhook.py`) — راهنما در `tests/README.md`.
