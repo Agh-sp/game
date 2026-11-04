@@ -13,3 +13,7 @@ __pycache__/
 *.egg-info/
 .venv/
 worldwar-game/backups/*.db
+
+# SQLite side files
+worldwar-game/*.db-wal
+worldwar-game/*.db-shm

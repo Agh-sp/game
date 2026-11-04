@@ -1500,7 +1500,12 @@ async def straits_menu(call: CallbackQuery):
 async def strait_capture(call: CallbackQuery):
     sid = int(call.data.split("|")[2])
     msg = await capture_strait(call.bot, call.from_user.id, sid)
-    await call.answer(msg[:180], show_alert=True)
+    await call.answer("🛰 گزارش نبرد دریایی صادر شد")
+    # گزارش کامل (استراتژی + تلفات دو طرف) به‌صورت پیام ارسال می‌شود تا کوتاه نشود
+    try:
+        await call.message.answer(msg, reply_markup=kb([back_row("g|strait")]))
+    except Exception:
+        await call.answer(msg[:180], show_alert=True)
     await straits_menu(call)
 
 

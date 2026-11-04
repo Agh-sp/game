@@ -1,4 +1,6 @@
-"""تنگه‌های راهبردی — قدرت دریایی، تصاحب، عوارض ۱.۵٪ درآمد غیرمالیاتی."""
+"""تنگه‌های راهبردی — نبرد دریایی واقعی، تصاحب، عوارض ۱.۵٪ درآمد غیرمالیاتی."""
+import random
+
 from core.db import db, get_setting
 from core.economy import get_country
 from core.events import log_event
@@ -20,32 +22,90 @@ async def my_straits(user_id: int) -> list[dict]:
     return await db.fetchall("SELECT * FROM straits WHERE owner_id=? ORDER BY id", (user_id,))
 
 
+async def coastal_defense(user_id: int) -> int:
+    """توان پدافند ساحلی: ۲۵٪ قدرت دفاعی تجهیزات زمینی/هوایی/پدافندی مدافع."""
+    rows = await db.fetchall(
+        "SELECT a.quantity, e.defense_power AS def, c.key AS cat_key, e.subcategory AS sub FROM player_assets a "
+        "JOIN equipment e ON e.id=a.item_id LEFT JOIN equipment_categories c ON c.id=e.category_id "
+        "WHERE a.user_id=? AND a.item_type='equipment'", (user_id,))
+    total = 0.0
+    for r in rows:
+        sub = (r["sub"] or "").lower()
+        if r["cat_key"] in ("land", "air") or sub in ("air_defense", "patriot", "coastal"):
+            total += (r["def"] or 0) * (r["quantity"] or 0)
+    return int(total * 0.25)
+
+
+async def fleet_composition(user_id: int) -> dict:
+    """ترکیب واقعی ناوگان برای انتخاب استراتژی (زیردریایی/ناو/هواپیمابر/سرباز)."""
+    rows = await db.fetchall(
+        "SELECT a.quantity, e.subcategory AS sub, e.name AS name FROM player_assets a "
+        "JOIN equipment e ON e.id=a.item_id JOIN equipment_categories c ON c.id=e.category_id "
+        "WHERE a.user_id=? AND a.item_type='equipment' AND c.key='sea' AND a.quantity>0", (user_id,))
+    comp = {"submarine": 0, "carrier": 0, "surface": 0}
+    for r in rows:
+        sub = (r["sub"] or "").lower()
+        name = r["name"] or ""
+        qty = int(r["quantity"] or 0)
+        if sub == "submarine" or "زیردریایی" in name:
+            comp["submarine"] += qty
+        elif sub == "carrier" or "ناو هواپیمابر" in name:
+            comp["carrier"] += qty
+            comp["surface"] += qty
+        else:
+            comp["surface"] += qty
+    soldiers = await db.fetchone(
+        "SELECT COALESCE(SUM(quantity),0) c FROM player_assets WHERE user_id=? AND item_type='soldier'",
+        (user_id,))
+    if soldiers and soldiers["c"]:
+        comp["soldier"] = int(soldiers["c"])
+        comp["air"] = comp.get("carrier", 0)
+    return comp
+
+
+async def naval_defense(of_user: int) -> int:
+    """توان دفاع دریایی مالک تنگه: ناوگان + پدافند ساحلی."""
+    return await naval_power(of_user) + await coastal_defense(of_user)
+
+
 async def capture_requirements(user_id: int, strait: dict) -> tuple[bool, str]:
-    """آیا این کشور می‌تواند تنگه را تصاحب کند؟"""
+    """آیا این کشور می‌تواند وارد نبرد تنگه شود؟ (نتیجهٔ نبرد در capture_strait است)"""
     country = await get_country(user_id)
     if not country or not country.get("has_sea"):
         return False, "❌ کشور شما مرز دریایی ندارد!"
     my = await naval_power(user_id)
-    if not strait["owner_id"] or strait["owner_id"] == user_id:
-        need = int(float(await get_setting("strait_min_naval", "500")))
-        if my < need:
-            return False, f"❌ برای تصاحب تنگه آزاد حداقل {fmt(need)} قدرت دریایی لازم است (شما: {fmt(my)})."
+    min_naval = int(float(await get_setting("strait_min_naval", "500")))
+    if my < min_naval:
+        return False, (f"❌ برای عملیات دریایی حداقل {fmt(min_naval)} قدرت دریایی لازم است "
+                       f"(شما: {fmt(my)}). از 🎖 پادگان ناو/زیردریایی بخرید.")
+    if not strait["owner_id"]:
         return True, ""
     if strait["owner_id"] == user_id:
         return False, "شما مالک این تنگه هستید."
     owner_country = await get_country(strait["owner_id"])
-    owner_power = await naval_power(strait["owner_id"])
-    ratio = float(await get_setting("strait_capture_ratio", "2.5"))
-    need = int(owner_power * ratio)
+    owner_def = await naval_defense(strait["owner_id"])
+    ratio = float(await get_setting("strait_capture_ratio", "1.3"))
+    need = int(owner_def * ratio)
     if my < need:
-        return False, (f"❌ برای گرفتن تنگه از {owner_country['name'] if owner_country else 'مالک'} "
-                       f"باید حداقل {fmt(need)} قدرت دریایی داشته باشید "
-                       f"(۲.۵ برابر قدرت او: {fmt(owner_power)}). شما: {fmt(my)}.")
+        return False, (f"❌ ناوگان شما برای شکستن دفاع دریایی "
+                       f"{owner_country['flag'] if owner_country else ''} "
+                       f"{owner_country['name'] if owner_country else 'مالک'} کافی نیست.\n"
+                       f"🛡 توان دفاع دریایی او: <b>{fmt(owner_def)}</b> "
+                       f"(حداقل لازم برای حمله: {fmt(need)})\n"
+                       f"🚢 قدرت دریایی شما: <b>{fmt(my)}</b>\n"
+                       "با خرید ناو و زیردریایی بیشتر (🎖 پادگان) یا صبر برای فرسایش ناوگان دشمن، دوباره تلاش کنید.")
     return True, ""
 
 
 async def capture_strait(bot, user_id: int, strait_id: int) -> str:
-    """تصاحب تنگه با شرط قدرت دریایی، نبرد دریایی واقعی، تلفات ناوگان و اعلان کانال با عکس."""
+    """نبرد دریایی واقعی برای تسخیر تنگه.
+
+    توان ناوگان دو طرف از تجهیزات واقعی محاسبه می‌شود، استراتژی حمله از ترکیب
+    ناوگان انتخاب می‌گردد، نتیجه بر اساس نسبت توان تعیین می‌شود و **هر دو طرف**
+    تلفات واقعی می‌دهند. گزارش کامل (استراتژی + خسارات دو طرف) در کانال اعلام می‌شود.
+    """
+    from core import combat
+
     s = await db.fetchone("SELECT * FROM straits WHERE id=? AND is_active=1", (strait_id,))
     if not s:
         return "تنگه یافت نشد."
@@ -55,88 +115,100 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
     old_owner = s["owner_id"]
     old_country = await get_country(old_owner) if old_owner else None
     me = await get_country(user_id)
-    my_pow = await naval_power(user_id)
 
-    # شبیه‌سازی درگیری دریایی و وارد کردن تلفات به ناوگان طرفین
-    atk_fleet_losses = []
-    def_fleet_losses = []
+    my_naval = await naval_power(user_id)
+    comp = await fleet_composition(user_id)
 
-    # محاسبه و کسر تلفات از ناوگان تصاحب‌کننده (۵ تا ۱۵ درصد ناوگان مهاجم)
-    my_ships = await db.fetchall(
-        "SELECT a.item_id, a.quantity, e.name, e.emoji FROM player_assets a "
-        "JOIN equipment e ON e.id=a.item_id JOIN equipment_categories c ON c.id=e.category_id "
-        "WHERE a.user_id=? AND a.item_type='equipment' AND c.key='sea' AND a.quantity>0", (user_id,))
-    from core.economy import sub_asset
-    for ship in my_ships:
-        lost = max(1, int(ship["quantity"] * 0.10)) if ship["quantity"] > 5 else (1 if ship["quantity"] > 2 else 0)
-        if lost > 0:
-            await sub_asset(user_id, "equipment", ship["item_id"], lost)
-            atk_fleet_losses.append(f"{lost}× {ship['emoji']} {ship['name']}")
+    # ─── تنگهٔ بدون مالک: استقرار ناوگان بدون درگیری ───
+    if not old_owner or old_owner == user_id:
+        strat = combat.strategy("garrison")
+        atk_losses, atk_units = await combat.apply_unit_losses(user_id, strat["atk_loss"], ("sea",))
+        await db.execute("UPDATE straits SET owner_id=?, captured_at=? WHERE id=?",
+                         (user_id, iso(), strait_id))
+        await log_event("strait", f"{me['name']} تنگه {s['name']} را بدون درگیری تصاحب کرد")
+        text = combat.battle_report(
+            strat=strat, atk_country=me, def_country=old_country or me,
+            atk_power=my_naval, def_power=0, chance=0.99, won=True,
+            atk_losses=atk_losses, def_losses=[], atk_units=atk_units, def_units=0,
+            atk_ratio=strat["atk_loss"], def_ratio=0.0,
+            title=f"تصاحب {s['name']}")
+        text += (f"\n\n⚓ کنترل آبراه <b>{s['name']}</b> به {me['flag']} <b>{me['name']}</b> منتقل شد.\n"
+                 "💰 ۱.۵٪ عوارض ترانزیت درآمد غیرمالیاتی کشورهای دارای مرز دریایی به شما می‌رسد.")
+        await announce_img(bot, text, "strait")
+        return (f"✅ {s['name']} بدون درگیری تصرف شد!\n"
+                "۱.۵٪ عوارض ترانزیت جهانی به حساب شما واریز می‌شود."
+                + ("\n💥 تلفات استقرار: " + " ، ".join(atk_losses[:3]) if atk_losses else ""))
 
-    # اگر تنگه مالک داشت، نبرد تمام‌عیار رخ داده و تلفات سنگین به ناوگان مالک قبلی وارد می‌شود
-    battle_dispatch = ""
-    if old_owner and old_owner != user_id:
-        enemy_ships = await db.fetchall(
-            "SELECT a.item_id, a.quantity, e.name, e.emoji FROM player_assets a "
-            "JOIN equipment e ON e.id=a.item_id JOIN equipment_categories c ON c.id=e.category_id "
-            "WHERE a.user_id=? AND a.item_type='equipment' AND c.key='sea' AND a.quantity>0", (old_owner,))
-        for eship in enemy_ships:
-            # نابودی ۳۰ تا ۵۰ درصد از ناوگان مدافع در این تنگه
-            def_lost = max(1, int(eship["quantity"] * 0.40)) if eship["quantity"] > 2 else eship["quantity"]
-            if def_lost > 0:
-                await sub_asset(old_owner, "equipment", eship["item_id"], def_lost)
-                def_fleet_losses.append(f"{def_lost}× {eship['emoji']} {eship['name']}")
+    # ─── نبرد دریایی واقعی با مالک ───
+    def_rows = await combat.equipment_rows(old_owner, ("sea",))
+    def_naval = await naval_power(old_owner)
+    def_coast = await coastal_defense(old_owner)
+    strat = combat.pick_strategy("sea", comp, defender_has_navy=def_naval > 0)
 
-        # کاهش رضایت عمومی کشور مدافع به دلیل از دست دادن تنگه استراتژیک
-        await db.execute("UPDATE states SET satisfaction=MAX(0, satisfaction-5) WHERE user_id=?", (old_owner,))
+    atk_power = my_naval * strat["atk"]
+    def_power = (def_naval + def_coast) * strat["def"]
+    chance = combat.battle_chance(atk_power, def_power)
+    won = random.random() < chance
+    atk_ratio, def_ratio = combat.loss_ratios(chance, strat)
 
-        battle_dispatch = (
-            f"\n🔥 <b>گزارش نبرد سنگین دریایی:</b>\n"
-            f"ناوگان جنگی {me['flag']} <b>{me['name']}</b> با قدرت آتش سنگین به استحکامات و گشت‌های دریایی "
-            f"{old_country['flag']} <b>{old_country['name']}</b> حمله بردند.\n"
-        )
-        if def_fleet_losses:
-            battle_dispatch += f"💥 ناوگان منهدم‌شده {old_country['name']}: " + " ، ".join(def_fleet_losses[:4]) + "\n"
-        if atk_fleet_losses:
-            battle_dispatch += f"⚓ تلفات ناوگان مهاجم {me['name']}: " + " ، ".join(atk_fleet_losses[:3]) + "\n"
+    # تلفات واقعی هر دو طرف (کسر از ناوگان و سربازان)
+    atk_losses, atk_units = await combat.apply_unit_losses(user_id, atk_ratio, ("sea",))
+    def_losses, def_units = await combat.apply_losses(old_owner, def_rows, def_ratio, "equipment")
+    if strat["key"] in ("amphibious", "combined"):
+        s_atk, s_atk_u = await combat.apply_soldier_losses(user_id, atk_ratio * 0.6)
+        if s_atk:
+            atk_losses += s_atk
+            atk_units += s_atk_u
+    s_def, s_def_u = await combat.apply_soldier_losses(old_owner, def_ratio * 0.5)
+    if s_def:
+        def_losses += s_def
+        def_units += s_def_u
 
-    # ثبت مالک جدید
-    await db.execute("UPDATE straits SET owner_id=?, captured_at=? WHERE id=?",
-                     (user_id, iso(), strait_id))
-    await log_event("strait", f"{me['name']} پس از نبرد دریایی تنگه {s['name']} را تصاحب کرد")
-
-    if old_owner and old_owner != user_id:
-        try:
-            alert_msg = (
-                f"🚨 <b>هشدار فوری جنگی!</b>\n\n"
-                f"ناوگان دریایی {me['flag']} <b>{me['name']}</b> به مواضع شما در <b>{s['name']}</b> حمله کردند!\n"
-                f"تنگه از کنترل شما خارج شد و ناوگان شما متحمل تلفات گردید."
-            )
-            if def_fleet_losses:
-                alert_msg += "\n💥 شناورهای آسیب‌دیده: " + " ، ".join(def_fleet_losses[:4])
-            await bot.send_message(old_owner, alert_msg)
-        except Exception:
-            pass
-
-    announcement_text = (
-        f"⚓ <b>تسخیر استراتژیک تنگه {s['name']}!</b>\n\n"
-        f"نیروهای دریایی کشور {me['flag']} <b>{me['name']}</b> با برتری ناوگان نظامی خود کنترل کامل آبراه "
-        f"<b>{s['name']}</b> را در دست گرفتند!\n"
-    )
-    if old_country:
-        announcement_text += f"طرف شکست‌خورده: {old_country['flag']} <b>{old_country['name']}</b>\n"
+    extra = []
+    if won:
+        await db.execute("UPDATE straits SET owner_id=?, captured_at=? WHERE id=?",
+                         (user_id, iso(), strait_id))
+        await db.execute("UPDATE states SET satisfaction=MAX(0, satisfaction-5) WHERE user_id=?",
+                         (old_owner,))
+        extra.append("🚩 تنگه از کنترل مدافع خارج شد (-۵٪ رضایت ملی مدافع).")
+        await log_event("strait", f"{me['name']} در نبرد دریایی تنگه {s['name']} را از "
+                                  f"{old_country['name'] if old_country else 'مالک'} گرفت")
     else:
-        announcement_text += "این آبراه پیش از این بدون حاکمیت دفاعی مستقر بود.\n"
+        await db.execute("UPDATE states SET satisfaction=MAX(0, satisfaction-3) WHERE user_id=?",
+                         (user_id,))
+        await db.execute("UPDATE states SET satisfaction=MIN(100, satisfaction+3) WHERE user_id=?",
+                         (old_owner,))
+        extra.append("🏳 مالکیت تنگه تغییر نکرد؛ مدافع مواضع خود را حفظ کرد (+۳٪ رضایت مدافع).")
+        await log_event("strait", f"حمله دریایی {me['name']} به {s['name']} دفع شد")
 
-    if battle_dispatch:
-        announcement_text += battle_dispatch
+    report = combat.battle_report(
+        strat=strat, atk_country=me, def_country=old_country,
+        atk_power=atk_power, def_power=def_power, chance=chance, won=won,
+        atk_losses=atk_losses, def_losses=def_losses,
+        atk_units=atk_units, def_units=def_units,
+        atk_ratio=atk_ratio, def_ratio=def_ratio,
+        extra_lines=extra, title=f"نبرد دریایی {s['name']}")
+    await announce_img(bot, report, "strait")
 
-    await announce_img(bot, announcement_text, "strait")
+    # اطلاع به مدافع
+    try:
+        await bot.send_message(old_owner, report)
+    except Exception:
+        pass
 
-    res_summary = f"✅ تنگه {s['name']} پس از نبرد با موفقیت به تصرف درآمد!\n۱.۵٪ عوارض ترانزیت جهانی به حساب شما واریز خواهد شد."
-    if atk_fleet_losses:
-        res_summary += f"\n💥 تلفات ناوگان شما در عملیات: {' ، '.join(atk_fleet_losses[:3])}"
-    return res_summary
+    if won:
+        head = (f"✅ <b>{s['name']} تسخیر شد!</b>\n"
+                f"🧠 استراتژی پیروز: {strat['emoji']} {strat['name']}\n"
+                "💰 ۱.۵٪ عوارض ترانزیت به خزانه شما واریز می‌شود.")
+    else:
+        head = (f"❌ <b>حمله به {s['name']} دفع شد!</b>\n"
+                f"🧠 استراتژی: {strat['emoji']} {strat['name']} — ناوگان مدافع مقاومت کرد.\n"
+                "مالکیت تنگه تغییر نکرد.")
+    if atk_losses:
+        head += f"\n💥 تلفات ناوگان شما ({round(atk_ratio * 100)}%): " + " ، ".join(atk_losses[:4])
+    else:
+        head += "\n💥 ناوگان شما تلفاتی نداشت."
+    return head
 
 
 async def toll_payers_slice(payer_id: int, non_tax_income: float) -> list[tuple[int, int]]:
@@ -187,19 +259,23 @@ async def straits_menu_text(user_id: int) -> tuple[str, list]:
         if s["owner_id"] == user_id:
             status = "👑 مالک: شما"
         elif owner:
-            status = f"🏳 مالک: {owner['flag']} {owner['name']}"
+            d_def = await naval_defense(s["owner_id"])
+            status = (f"🏳 مالک: {owner['flag']} {owner['name']} — 🛡 دفاع دریایی: {fmt(d_def)}")
         else:
             status = "🆓 بدون مالک"
         lines.append(f"• {s['emoji']} <b>{s['name']}</b> — {status}")
         if s["owner_id"] != user_id:
-            buttons.append([(f"⚔️ تصاحب {s['name']}", f"g|stc|{s['id']}")])
+            buttons.append([(f"⚔️ حمله دریایی برای تسخیر {s['name']}", f"g|stc|{s['id']}")])
     
     if mine:
         lines.append("\n💰 عوارض تنگه‌ها: ۱.۵٪ درآمد غیرمالیاتی هر کشور دارای مرز دریایی به شما می‌رسد.")
         lines.append("🚫 <b>قابلیت انسداد:</b> شما می‌توانید تنگه خود را روی هر کشوری ببندید تا ۱۰٪ درآمدش کسر شود.")
         buttons.append([("🚫 مدیریت انسداد تنگه‌ها (کاهش درآمد کشور هدف)", "g|stblk_menu")])
 
-    lines.append("\n⚠️ کشورهای بدون مرز دریایی نه عوارض می‌پردازند و نه درآمد تنگه دارند.")
+    lines.append("\n⚔️ <b>تسخیر تنگه = نبرد دریایی واقعی:</b> توان ناوگان شما با ناوگان + پدافند ساحلی مالک "
+                 "سنجیده می‌شود، نتیجه بر اساس نسبت قدرت تعیین می‌گردد و <b>هر دو طرف</b> تلفات واقعی "
+                 "می‌دهند (کسر از انبار). گزارش استراتژی حمله و خسارات دو طرف در کانال اعلام می‌شود.")
+    lines.append("⚠️ کشورهای بدون مرز دریایی نه عوارض می‌پردازند و نه درآمد تنگه دارند.")
     return "\n".join(lines), buttons
 
 
@@ -229,11 +305,11 @@ async def toggle_strait_blockade(owner_id: int, strait_id: int, target_user_id: 
     
     if exists:
         await db.execute("DELETE FROM strait_blockades WHERE id=?", (exists["id"],))
-        await log_event("strait", f"تنگه {strait['name']} برای کشور {target_country['name']} بازگشایی شد")
-        return False, f"🟢 تنگه {strait['name']} برای کشور {target_country['flag']} {target_country['name']} باز شد."
+        await log_event("strait", f"{strait['name']} برای کشور {target_country['name']} بازگشایی شد")
+        return False, f"🟢 {strait['name']} برای کشور {target_country['flag']} {target_country['name']} باز شد."
     else:
         await db.execute(
             "INSERT INTO strait_blockades(strait_id, owner_id, target_user_id) VALUES(?,?,?)",
             (strait_id, owner_id, target_user_id))
-        await log_event("strait", f"تنگه {strait['name']} روی کشور {target_country['name']} مسدود شد (-10% درآمد)")
-        return True, f"🚫 تنگه {strait['name']} با موفقیت روی {target_country['flag']} {target_country['name']} مسدود شد!\n۱۰٪ از درآمد ملی این کشور کسر می‌شود."
+        await log_event("strait", f"{strait['name']} روی کشور {target_country['name']} مسدود شد (-10% درآمد)")
+        return True, f"🚫 {strait['name']} با موفقیت روی {target_country['flag']} {target_country['name']} مسدود شد!\n۱۰٪ از درآمد ملی این کشور کسر می‌شود."

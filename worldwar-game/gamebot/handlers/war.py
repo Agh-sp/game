@@ -453,6 +453,8 @@ async def _equip_picker(call, state: FSMContext, allowed_cats: list, as_message:
                      "❌ تجهیز مناسب ندارید! اول از 🎖 پادگان خرید کنید.")
     if total_soldiers:
         lines.append(f"\n🪖 <b>{fmt(total_soldiers)} سرباز</b> به‌طور خودکار در نبرد شرکت می‌کنند.")
+    lines.append("\n🧠 <b>استراتژی حمله</b> هنگام اجرا بر اساس ترکیب نیروهای اعزامی (زیردریایی/ناو/"
+                 "سرباز/هوایی/موشکی) انتخاب می‌شود و همراه خسارات دو طرف در کانال اعلام می‌گردد.")
 
     rows = [[(f"{e['emoji']} {e['name']} (موجود {fmt(e['quantity'])})",
               f"g|weq|{e['id']}")] for e in my_equipment]
@@ -627,8 +629,31 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         atk_power = max(10.0, atk_power - missile_damage_blocked)
         intercepted_missiles = True
 
-    chance = clamp(atk_power / (atk_power + d_def), 0.05, 0.95) if (atk_power + d_def) > 0 else 0.5
+    # ─── استراتژی حمله بر اساس ترکیب واقعی نیروها ───
+    from core import combat
+    comp: dict = {}
+    for eid, qty in plan.items():
+        e = await db.fetchone(
+            "SELECT e.subcategory AS sub, c.key AS cat_key FROM equipment e "
+            "LEFT JOIN equipment_categories c ON c.id=e.category_id WHERE e.id=?", (int(eid),))
+        if e:
+            key = e["cat_key"] or "land"
+            if (e["sub"] or "").lower() == "submarine":
+                key = "submarine"
+            comp[key] = comp.get(key, 0) + qty
+    my_soldiers = await db.fetchone(
+        "SELECT COALESCE(SUM(quantity),0) c FROM player_assets WHERE user_id=? AND item_type='soldier'",
+        (attacker_id,))
+    if my_soldiers and my_soldiers["c"]:
+        comp["soldier"] = int(my_soldiers["c"])
+    strat = combat.pick_strategy(atype, comp, defender_has_navy=bool(def_equipment_list),
+                                 allow_blockade=False)
+    atk_power *= strat["atk"]
+    d_def *= strat["def"]
+
+    chance = combat.battle_chance(atk_power, d_def)
     won = random.random() < chance
+    atk_loss, def_loss = combat.loss_ratios(chance, strat)
 
     # تلفات و غارت
     defender_user = await db.fetchone("SELECT * FROM users WHERE id=?", (defender_id,)) or {"money": 0}
@@ -637,29 +662,25 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         loot = int((defender_user["money"] or 0) * 0.10)
         await db.execute("UPDATE users SET money=money-? WHERE id=?", (loot, defender_id))
         await db.execute("UPDATE users SET money=money+? WHERE id=?", (loot, attacker_id))
-        def_loss, atk_loss = 0.30, 0.15
     else:
-        def_loss, atk_loss = 0.10, 0.40
+        pass
 
-    # محاسبه و کسر تلفات تجهیزات مهاجم با نام
-    atk_destroyed_names = []
-    for eid, qty in plan.items():
-        lost_count = max(1, int(qty * atk_loss))
-        if not await sub_asset(attacker_id, "equipment", int(eid), lost_count):
-            continue
-        eq_info = await db.fetchone("SELECT name, emoji FROM equipment WHERE id=?", (int(eid),))
-        if eq_info:
-            atk_destroyed_names.append(f"{lost_count}× {eq_info['emoji']} {eq_info['name']}")
+    # ─── کسر تلفات واقعی از هر دو طرف (تجهیزات + سرباز) ───
+    atk_rows = await combat.equipment_rows(attacker_id, only_ids=[int(i) for i in plan.keys()])
+    atk_destroyed_names, atk_lost_units = await combat.apply_losses(
+        attacker_id, atk_rows, atk_loss, "equipment")
+    def_destroyed_names, def_lost_units = await combat.apply_losses(
+        defender_id, def_equipment_list, def_loss, "equipment")
 
-    # محاسبه و کسر تلفات تجهیزات مدافع با نام
-    def_destroyed_names = []
-    for e in def_equipment_list:
-        row = await db.fetchone("SELECT quantity FROM player_assets WHERE user_id=? AND item_id=? AND item_type='equipment'",
-                                (defender_id, e["id"]))
-        if row and row["quantity"] > 0:
-            lost_count = max(1, int(row["quantity"] * def_loss))
-            await sub_asset(defender_id, "equipment", e["id"], lost_count)
-            def_destroyed_names.append(f"{lost_count}× {e['emoji']} {e['name']}")
+    # سربازان دو طرف هم در نبرد کشته می‌شوند
+    s_atk, s_atk_units = await combat.apply_soldier_losses(attacker_id, atk_loss * 0.7)
+    if s_atk:
+        atk_destroyed_names += s_atk
+        atk_lost_units += s_atk_units
+    s_def, s_def_units = await combat.apply_soldier_losses(defender_id, def_loss * 0.6)
+    if s_def:
+        def_destroyed_names += s_def
+        def_lost_units += s_def_units
 
     # آسیب به زیرساخت‌ها در صورت برخورد موشک
     infrastructure_damage = ""
@@ -668,53 +689,36 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         infrastructure_damage = "💥 <b>تخریب زیرساخت‌ها:</b> اصابت موشک‌ها و آتشباری هوایی به مراکز صنعتی (-۴٪ رضایت ملی دشمن)\n"
 
     await db.execute(
-        "INSERT INTO battles(war_id, attacker_id, defender_id, atk_type, atk_power, def_power, result, loot) "
-        "VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO battles(war_id, attacker_id, defender_id, atk_type, atk_power, def_power, result, loot, strategy) "
+        "VALUES(?,?,?,?,?,?,?,?,?)",
         (war["id"], attacker_id, defender_id, atype, round(atk_power), round(d_def),
-         "win" if won else "lose", loot))
+         "win" if won else "lose", loot, strat["name"]))
     await bump_progress(attacker_id, "war")
     await bump_progress(defender_id, "war")
 
     atype_fa = ATTACK_TYPES.get(atype, atype)
-    
-    # ساخت گزارش کامل عملیات نظامی با پدافند و تلفات
-    report_lines = [
-        f"⚔️ <b>گزارش نبرد {atype_fa}</b>",
-        f"طرفین: {a_country['flag']} <b>{a_country['name']}</b> ➔ {d_country['flag']} <b>{d_country['name']}</b>\n",
-        f"🗡 توان عملیاتی تهاجم: <b>{fmt(atk_power)}</b>",
-        f"🛡 استحکامات و توان پدافندی: <b>{fmt(d_def)}</b>",
-    ]
 
+    extra_lines = []
     if intercepted_missiles:
-        report_lines.append(
-            f"🛡️ <b>عملکرد پدافند هوایی مدافع:</b> سامانه‌های پدافندی {round(intercept_rate * 100)}٪ از موشک‌ها و راکت‌های شلیک‌شده را در آسمان منهدم و رهگیری کردند!"
-        )
+        extra_lines.append(
+            f"🛡️ <b>پدافند هوایی مدافع:</b> {round(intercept_rate * 100)}٪ از موشک‌ها و راکت‌های شلیک‌شده "
+            "در آسمان رهگیری و منهدم شدند.")
     elif missile_power > 0:
-        report_lines.append(
-            "🚀 <b>تخریب موشکی:</b> مدافع فاقد پوشش پدافندی موثر بود؛ موشک‌ها مستقیماً به اهداف اصابت کردند!"
-        )
-
-    report_lines.append(f"🎲 شانس موفقیت ارتش: <b>{round(chance * 100)}%</b>\n")
-
-    if won:
-        report_lines.append(f"🏆 <b>پیروزی قاطع نیروهای {a_country['name']}!</b>")
-        report_lines.append(f"💰 غارت خزانه: <b>{fmt_money(loot)}</b> پول ملی")
-    else:
-        report_lines.append(f"🛡 <b>مدافعان {d_country['name']} حمله را دفع کردند!</b>")
-
+        extra_lines.append("🚀 <b>تخریب موشکی:</b> مدافع پوشش پدافندی موثر نداشت؛ موشک‌ها مستقیم اصابت کردند.")
+    if won and loot:
+        extra_lines.append(f"💰 غارت خزانه دشمن: <b>{fmt_money(loot)}</b>")
     if infrastructure_damage:
-        report_lines.append(infrastructure_damage.strip())
+        extra_lines.append(infrastructure_damage.strip())
+    extra_lines.append(f"🎯 نوع عملیات: {atype_fa}")
 
-    report_lines.append("\n💥 <b>تلفات و خسارات وارده:</b>")
-    if def_destroyed_names:
-        report_lines.append(f"• ادوات منهدم‌شده مدافع ({round(def_loss * 100)}%):\n   " + " ، ".join(def_destroyed_names[:5]))
-    else:
-        report_lines.append("• مدافع تجهیزی در منطقه نداشت.")
-
-    if atk_destroyed_names:
-        report_lines.append(f"• ادوات منهدم‌شده مهاجم ({round(atk_loss * 100)}%):\n   " + " ، ".join(atk_destroyed_names[:5]))
-
-    result_text = "\n".join(report_lines)
+    result_text = combat.battle_report(
+        strat=dict(strat, name=f"{strat['name']} ({atype_fa.strip()})"),
+        atk_country=a_country, def_country=d_country,
+        atk_power=atk_power, def_power=d_def, chance=chance, won=won,
+        atk_losses=atk_destroyed_names, def_losses=def_destroyed_names,
+        atk_units=atk_lost_units, def_units=def_lost_units,
+        atk_ratio=atk_loss, def_ratio=def_loss,
+        extra_lines=extra_lines, title=f"گزارش نبرد {atype_fa}")
     await announce(call.bot, result_text, section="war_attack")
     await call.answer()
     try:

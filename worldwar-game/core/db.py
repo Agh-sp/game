@@ -577,6 +577,7 @@ MIGRATIONS = [
     ("images", "country_id", "INTEGER DEFAULT 0"),
     ("equipment", "subcategory", "TEXT DEFAULT ''"),
     ("rescue_campaigns", "ends_at", "TEXT"),
+    ("battles", "strategy", "TEXT DEFAULT ''"),
 ]
 
 
@@ -721,6 +722,14 @@ async def init_db() -> None:
     except Exception:
         pass
 
+    # مهاجرت قاعدهٔ قدیمی تصاحب تنگه (۲.۵ برابر) به نبرد واقعی (۱.۳ برابر)
+    try:
+        row = await db.fetchone("SELECT value FROM settings WHERE key='strait_capture_ratio'")
+        if row and str(row["value"]).strip() in ("2.5", "2,5"):
+            await set_setting("strait_capture_ratio", "1.3")
+    except Exception:
+        pass
+
     # یکپارچه‌سازی مالکیت کشورها با کاربران (مالکیت دوگانه، مالک بی‌کاربر و ...)
     await sync_country_owners()
 
@@ -822,7 +831,7 @@ DEFAULT_SETTINGS = {
     "rescue_payout_percent": "10",
     # ── تنگه‌ها ──
     "strait_min_naval": "500",              # حداقل قدرت دریایی برای تصاحب تنگه آزاد
-    "strait_capture_ratio": "2.5",           # ضریب تصاحب تنگه دارای مالک
+    "strait_capture_ratio": "1.3",           # حداقل نسبت توان دریایی برای حمله به تنگه دارای مالک
     "strait_toll_percent": "1.5",            # عوارض درآمد غیرمالیاتی
     # ── ارز ──
     "main_currency": "",                     # نام ارز اصلی فعلی بازی
