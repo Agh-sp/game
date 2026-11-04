@@ -36,6 +36,29 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_setting_value(key, default=None):
+    """خواندن یک تنظیم از جدول settings (بدون نیاز به import بخش بازی)."""
+    try:
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        finally:
+            conn.close()
+        if row and row[0] not in (None, ""):
+            return row[0]
+    except Exception:
+        pass
+    return default
+
+
+def get_initial_money():
+    """بودجه اولیهٔ بازیکن تازه‌وارد (تنظیم initial_money — پیش‌فرض ۲۰۰)."""
+    try:
+        return int(float(get_setting_value("initial_money", 200)))
+    except (TypeError, ValueError):
+        return 200
+
+
 def firebase_request(method, path, data=None):
     env_vars = load_env()
     base_url = env_vars.get('FIREBASE_DB_URL') or os.environ.get('FIREBASE_DB_URL', '')
@@ -64,6 +87,7 @@ def firebase_request(method, path, data=None):
         return None
 
 def sync_from_firebase():
+    initial_money = get_initial_money()
     """Import users and states from Firebase Realtime Database into SQLite with full field protection"""
     fb_users = firebase_request('GET', 'game/users')
     fb_states = firebase_request('GET', 'game/states')
@@ -95,7 +119,7 @@ def sync_from_firebase():
                 u.get('full_name', ''),
                 u.get('joined_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                 int(u.get('royal_coins', 0)),
-                int(u.get('money', 50000000)),
+                int(u.get('money', initial_money)),
                 u.get('country_id'),
                 u.get('country_taken_at'),
                 int(u.get('banned', 0))
@@ -380,7 +404,7 @@ def add_user(data):
     user_id = int(data.get('id'))
     username = data.get('username', '').lstrip('@')
     full_name = data.get('full_name', '') or username or f'کاربر {user_id}'
-    money = int(data.get('money', 50000000))
+    money = int(data.get('money', get_initial_money()))
     royal_coins = int(data.get('royal_coins', 0))
     country_id = data.get('country_id')
     banned = int(data.get('banned', 0))
@@ -503,8 +527,9 @@ def reset_all_players():
     # 1. Free all countries
     cur.execute("UPDATE countries SET owner_id = NULL")
     
-    # 2. Reset users table
-    cur.execute("UPDATE users SET country_id = NULL, country_taken_at = NULL, royal_coins = 0, money = 50000000, banned = 0")
+    # 2. Reset users table (بودجه اولیه از تنظیمات بازی خوانده می‌شود)
+    cur.execute("UPDATE users SET country_id = NULL, country_taken_at = NULL, royal_coins = 0, money = ?, banned = 0",
+                (get_initial_money(),))
     
     # 3. Clean gameplay tables
     tables = [
@@ -534,15 +559,16 @@ def reset_all_wealth(mode='both_default'):
     cur.execute("SELECT COUNT(*) FROM users")
     total_users = cur.fetchone()[0]
     
+    initial = get_initial_money()
     if mode == 'both_default':
-        cur.execute("UPDATE users SET royal_coins = 0, money = 50000000")
-        msg = f"سکه شاهی (۰) و پول پایه (۵۰ میلیون) برای تمام {total_users} کاربر ریست شد"
+        cur.execute("UPDATE users SET royal_coins = 0, money = ?", (initial,))
+        msg = f"سکه شاهی (۰) و بودجه پایه ({initial:,}) برای تمام {total_users} کاربر ریست شد"
     elif mode == 'coins_zero':
         cur.execute("UPDATE users SET royal_coins = 0")
         msg = f"سکه شاهی تمام {total_users} کاربر صفر شد"
     elif mode == 'money_default':
-        cur.execute("UPDATE users SET money = 50000000")
-        msg = f"پول پایه تمام {total_users} کاربر روی ۵۰ میلیون تنظیم شد"
+        cur.execute("UPDATE users SET money = ?", (initial,))
+        msg = f"بودجه پایه تمام {total_users} کاربر روی {initial:,} تنظیم شد"
     elif mode == 'money_zero':
         cur.execute("UPDATE users SET money = 0")
         msg = f"موجودی پول تمام {total_users} کاربر صفر شد"
