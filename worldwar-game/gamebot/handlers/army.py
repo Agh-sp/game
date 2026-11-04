@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from core.db import db
 from core.economy import (add_asset, assets_of, bump_progress, get_country,
                           project_done, settle_trainings)
-from core.utils import fmt, hours_left, fmt_hm, iso, add_hours, clamp
+from core.utils import fmt, fmt_money, hours_left, fmt_hm, iso, add_hours, clamp
 from gamebot.common import back_row, kb, send_home, dm
 
 router = Router()
@@ -118,10 +118,10 @@ async def base_reject(call: CallbackQuery):
 @router.callback_query(F.data == "g|basereq")
 async def base_request_list(call: CallbackQuery):
     countries = await db.fetchall(
-        "SELECT c.*, u.full_name FROM countries c JOIN users u ON u.id=c.owner_id "
-        "WHERE c.owner_id IS NOT NULL AND c.owner_id!=? ORDER BY c.name",
+        "SELECT c.*, u.id AS owner_uid, u.full_name FROM users u JOIN countries c ON c.id=u.country_id "
+        "WHERE u.id!=? AND u.banned=0 AND c.is_active=1 ORDER BY c.name",
         (call.from_user.id,))
-    rows = [[(f"{c['flag']} {c['name']}", f"g|basereqr|{c['owner_id']}")] for c in countries]
+    rows = [[(f"{c['flag']} {c['name']}", f"g|basereqr|{c['owner_uid']}")] for c in countries]
     rows.append(back_row("g|base"))
     await call.answer()
     await call.message.edit_text(
@@ -157,18 +157,23 @@ async def base_request_send(call: CallbackQuery):
 # ─── پادگان ───
 
 
+def barracks_rows() -> list:
+    """دکمه‌های پادگان — هم برای ویرایش پیام و هم برای ارسال پیام تازه."""
+    return [
+        [("📋 تجهیزات و سربازان من", "g|eq")],
+        [("🛒 خرید تجهیزات", "g|eqshop")],
+        [("🎓 تعلیم سرباز", "g|train")],
+        back_row("g|army"),
+    ]
+
+
 @router.callback_query(F.data == "g|bar")
 async def barracks_menu(call: CallbackQuery):
     await settle_trainings(call.from_user.id)
     await call.answer()
     await call.message.edit_text(
         "🎖 <b>پادگان</b>\n\nگزینه مورد نظر را انتخاب کنید:",
-        reply_markup=kb([
-            [("📋 تجهیزات و سربازان من", "g|eq")],
-            [("🛒 خرید تجهیزات", "g|eqshop")],
-            [("🎓 تعلیم سرباز", "g|train")],
-            back_row("g|army"),
-        ]),
+        reply_markup=kb(barracks_rows()),
     )
 
 
@@ -245,7 +250,15 @@ SUBCATS = {
         ("firewall", "🛡️ فایروال‌ها و مراکز پایش داده"),
         ("ew", "📡 سامانه‌های جنگ الکترونیک"),
     ],
+    "missile": [
+        ("cruise", "🚀 موشک‌های کروز"),
+        ("ballistic", "☄️ موشک‌های بالستیک"),
+        ("antiship", "🌊 موشک‌های ضدکشتی"),
+        ("sam", "🛡️ سامانه‌های پدافند موشکی"),
+    ],
 }
+
+SUB_FALLBACK_TITLE = "📦 سایر تجهیزات این دسته"
 
 
 @router.callback_query(F.data.startswith("g|eqcat|"))
@@ -264,7 +277,7 @@ async def eq_category(call: CallbackQuery):
         lines = [f"{cat['emoji']} <b>تجهیزات تسلیحات {cat['title']}</b>\n"]
         rows = []
         for e in items:
-            price = f"🪙 {fmt(e['price_coins'])} سکه شاهی" if e["price_coins"] else f"💰 {fmt(e['price_money'])}"
+            price = f"🪙 {fmt(e['price_coins'])} سکه شاهی" if e["price_coins"] else f"💰 {fmt_money(e['price_money'])}"
             lines.append(f"{e['emoji']} <b>{e['name']}</b>: {price} — ⚔️{fmt(e['attack_power'])} ⚡سرعت {e['speed']}")
             rows.append([(f"{e['emoji']} {e['name']}", f"g|eqbuy|{e['id']}")])
         rows.append(back_row("g|eqshop"))
@@ -272,16 +285,50 @@ async def eq_category(call: CallbackQuery):
         return await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
 
     # برای سایر رسته‌ها: نمایش زیردسته‌ها (مانند پهپاد، جنگنده، تانک و ...)
-    sub_list = SUBCATS.get(cat["key"], [])
+    known = dict(SUBCATS.get(cat["key"], []))
+    # زیردسته‌های واقعی موجود در دیتابیس — تا تجهیزاتی که ادمین دستی/جمعی ساخته هم دیده شوند
+    present = [r["subcategory"] or "" for r in await db.fetchall(
+        "SELECT DISTINCT subcategory FROM equipment WHERE category_id=? AND is_active=1", (cid,))]
+    ordered: list[tuple[str, str]] = []
+    for key, title in SUBCATS.get(cat["key"], []):
+        if key in present:
+            ordered.append((key, title))
+    for key in present:
+        if key and key not in known:
+            ordered.append((key, f"📦 سایر ({key})"))
+    if "" in present:
+        ordered.append(("", SUB_FALLBACK_TITLE))
+
+    # اگر فقط یک گروه وجود دارد، مستقیم تجهیزات را نشان بده
+    if len(ordered) <= 1 and ordered:
+        sub_key = ordered[0][0]
+        items = await db.fetchall(
+            "SELECT e.*, p.name AS req_name FROM equipment e "
+            "LEFT JOIN buildings p ON p.id=e.requires_project_id "
+            "WHERE e.category_id=? AND COALESCE(e.subcategory,'')=? AND e.is_active=1 "
+            "ORDER BY e.price_money, e.price_coins", (cid, sub_key))
+        lines = [f"{cat['emoji']} <b>تجهیزات {cat['title']}</b>\n"]
+        rows = []
+        for e in items:
+            price = f"🪙 {fmt(e['price_coins'])} سکه" if e["price_coins"] else f"💰 {fmt_money(e['price_money'])}"
+            lines.append(f"{e['emoji']} <b>{e['name']}</b>: {price} — ⚔️{fmt(e['attack_power'])} "
+                         f"🛡{fmt(e['defense_power'])} ⚡{e['speed']}"
+                         + (f"\n   🔒 {e['requires_text']}" if e["requires_text"] else ""))
+            rows.append([(f"{e['emoji']} {e['name']}", f"g|eqbuy|{e['id']}")])
+        rows.append(back_row("g|eqshop"))
+        await call.answer()
+        return await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
+
     lines = [
         f"{cat['emoji']} <b>دسته‌بندی تجهیزات {cat['title']}</b>\n",
         "زیرشاخه مورد نظر را انتخاب کنید تا انواع تجهیزات پایه و پیشرفته آن را مشاهده کنید:\n",
     ]
     rows = []
-    for sub_key, sub_title in sub_list:
+    for sub_key, sub_title in ordered:
         count = (await db.fetchone(
-            "SELECT COUNT(*) c FROM equipment WHERE category_id=? AND subcategory=?", (cid, sub_key)))["c"]
-        rows.append([(f"{sub_title} ({count})", f"g|eqsub|{cid}|{sub_key}")])
+            "SELECT COUNT(*) c FROM equipment WHERE category_id=? AND COALESCE(subcategory,'')=? AND is_active=1",
+            (cid, sub_key)))["c"]
+        rows.append([(f"{sub_title} ({count})", f"g|eqsub|{cid}|{sub_key or '-'}")])
     rows.append(back_row("g|eqshop"))
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
@@ -291,22 +338,24 @@ async def eq_category(call: CallbackQuery):
 async def eq_subcategory_items(call: CallbackQuery):
     _, _, cid, sub_key = call.data.split("|")
     cid = int(cid)
+    sub_key = "" if sub_key == "-" else sub_key
     cat = await db.fetchone("SELECT * FROM equipment_categories WHERE id=?", (cid,))
     items = await db.fetchall(
         "SELECT e.*, p.name AS req_name FROM equipment e "
         "LEFT JOIN buildings p ON p.id=e.requires_project_id "
-        "WHERE e.category_id=? AND e.subcategory=? AND e.is_active=1 ORDER BY e.price_money, e.price_coins",
+        "WHERE e.category_id=? AND COALESCE(e.subcategory,'')=? AND e.is_active=1 "
+        "ORDER BY e.price_money, e.price_coins",
         (cid, sub_key),
     )
     sub_name_dict = dict(SUBCATS.get(cat["key"], [])) if cat else {}
-    sub_title = sub_name_dict.get(sub_key, sub_key)
+    sub_title = sub_name_dict.get(sub_key, SUB_FALLBACK_TITLE if not sub_key else f"📦 سایر ({sub_key})")
     lines = [f"{cat['emoji']} <b>{sub_title}</b>\n"]
     rows = []
     for e in items:
         if e["price_coins"]:
             price = f"🪙 {fmt(e['price_coins'])} سکه"
         else:
-            price = f"💰 {fmt(e['price_money'])}"
+            price = f"💰 {fmt_money(e['price_money'])}"
         stats = []
         if e["attack_power"]:
             stats.append(f"⚔️ {fmt(e['attack_power'])}")
@@ -340,10 +389,13 @@ async def eq_buy(call: CallbackQuery, state: FSMContext):
     await state.set_state(ArmyFSM.eq_qty)
     await state.update_data(eq_id=eid)
     await call.answer()
-    price = f"🪙 {fmt(e['price_coins'])} سکه" if e["price_coins"] else f"💰 {fmt(e['price_money'])}"
+    price = f"🪙 {fmt(e['price_coins'])} سکه" if e["price_coins"] else f"💰 {fmt_money(e['price_money'])}"
     await call.message.edit_text(
-        f"{e['emoji']} <b>{e['name']}</b> — {price}\n\n"
-        "تعداد مورد نیاز برای خرید را بنویسید:\n برای انصراف /cancel"
+        f"{e['emoji']} <b>{e['name']}</b> — {price} برای هر عدد\n\n"
+        f"💰 موجودی پول شما: <b>{fmt_money(user['money'])}</b>\n"
+        f"🪙 موجودی سکه شاهی: <b>{fmt(user['royal_coins'])}</b>\n"
+        + (f"🔒 پیش‌نیاز: {e['requires_text']}\n" if e["requires_text"] else "")
+        + "\nتعداد مورد نیاز برای خرید را بنویسید:\n برای انصراف /cancel"
     )
 
 
@@ -365,7 +417,7 @@ async def eq_qty_input(message: Message, state: FSMContext):
         return await send_home(message, f"❌ سکه شاهی کافی نیست — نیاز: {fmt(total_coins)}")
     if total_money and user["money"] < total_money:
         await state.clear()
-        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt(total_money)}")
+        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt_money(total_money)}")
     await state.clear()
     if total_coins:
         await db.execute("UPDATE users SET royal_coins=royal_coins-? WHERE id=?", (total_coins, user["id"]))
@@ -374,18 +426,12 @@ async def eq_qty_input(message: Message, state: FSMContext):
     await add_asset(user["id"], "equipment", e["id"], qty)
     await bump_progress(user["id"], "bought", qty)
     price = f" + 🪙 {fmt(total_coins)} سکه" if total_coins else ""
-    await send_home(message, f"✅ <b>{fmt(qty)} × {e['name']}</b> به زرادخانه اضافه شد! (💰 {fmt(total_money)}{price})")
-    await barracks_menu(_FakeCall(message))
-
-
-class _FakeCall:
-    def __init__(self, message: Message):
-        self.message = message
-        self.from_user = message.from_user
-        self.bot = message.bot
-
-    async def answer(self, *_a, **_k):
-        pass
+    await send_home(
+        message,
+        f"✅ <b>{fmt(qty)} × {e['name']}</b> به زرادخانه اضافه شد! (💰 {fmt_money(total_money)}{price})\n\n"
+        "🎖 <b>پادگان</b> — گزینه بعدی را انتخاب کنید:",
+        reply_markup=kb(barracks_rows()),
+    )
 
 
 # ─── تعلیم سرباز ───
@@ -445,7 +491,7 @@ async def train_qty_input(message: Message, state: FSMContext):
     cost = count * (t["cost_per_unit"] or 0)
     if user["money"] < cost:
         await state.clear()
-        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt(cost)}")
+        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt_money(cost)}")
     await state.clear()
     await db.execute("UPDATE users SET money=money-? WHERE id=?", (cost, user["id"]))
     await db.execute(
@@ -453,8 +499,9 @@ async def train_qty_input(message: Message, state: FSMContext):
         (user["id"], t["id"], count, add_hours(t["train_hours"] or 24)),
     )
     await bump_progress(user["id"], "trained", count)
-    await send_home(message, 
+    await send_home(message,
         f"🎓 آموزش <b>{fmt(count)} × {t['name']}</b> آغاز شد!\n"
-        f"⏱ پایان: {fmt_hm(t['train_hours'])} دیگر\n💰 هزینه: {fmt(cost)}"
+        f"⏱ پایان: {fmt_hm(t['train_hours'])} دیگر\n💰 هزینه: {fmt_money(cost)}\n\n"
+        "🎖 <b>پادگان</b> — گزینه بعدی را انتخاب کنید:",
+        reply_markup=kb(barracks_rows()),
     )
-    await barracks_menu(_FakeCall(message))

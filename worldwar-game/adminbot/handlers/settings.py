@@ -16,7 +16,8 @@ router = Router()
 
 ORDER = ["coin_price_toman", "coins_to_money_rate", "c2c_card", "c2c_holder",
          "join_channels", "announcement_channel", "start_text", "guide_text",
-         "income_base", "income_interval_minutes", "food_price_per_ton", "trade_tax_percent",
+         "income_base", "initial_money", "income_interval_minutes", "food_price_per_ton",
+         "trade_tax_percent", "war_vote_minutes",
          "vote_duration_hours", "country_change_hours", "cyber_cooldown_hours", "bot_off",
          "sec_negotiation", "sec_direct_trade", "sec_rescue_sale", "sec_straits",
          "sec_oil", "sec_rescue_org",
@@ -36,7 +37,9 @@ HELP = {
     "announcement_channel": "کانال اعلانات (احداث/جنگ/بیانیه/رای‌گیری) مثل @mychannel — ربات باید ادمین کانال باشد",
     "start_text": "متن خوش‌آمد /start قبل از بررسی عضویت",
     "guide_text": "متن کامل راهنمای بازی که در بخش «راهنمای بازی» نمایش داده می‌شود",
-    "income_base": "ضریب درآمد روزانه کشورها (پیش‌فرض ۱۰۰)",
+    "income_base": "ضریب درآمد روزانه کشورها (پیش‌فرض ۱۰۰) — درآمد = (جمعیت÷۱۰۰۰) × این ضریب × ضریب رضایت × (۱+نرخ مالیات)",
+    "initial_money": "بودجه اولیه هر بازیکن تازه‌وارد، به واحد پول پایهٔ بازی — پیش‌فرض ۲۰۰ (با /start اعمال می‌شود و در ریست بازیکنان هم استفاده می‌شود)",
+    "war_vote_minutes": "مدت رای‌گیری مجوز جنگ در سازمان ملل (دقیقه — پیش‌فرض ۳۰)",
     "food_price_per_ton": "قیمت خرید هر تن غذا",
     "trade_tax_percent": "مالیات معاملات بازار (درصد)",
     "vote_duration_hours": "مدت رای‌گیری‌های سازمان ملل (ساعت)",
@@ -83,7 +86,10 @@ async def cmd_settings(message: Message, perms: set):
 async def settings_menu_payload() -> dict:
     lines = ["⚙️ <b>تنظیمات بازی</b>\n"]
     buttons = []
-    for key in ORDER:
+    # هر کلید تازه‌ای که در دیتابیس باشد ولی در ORDER نباشد هم نمایش داده می‌شود
+    db_keys = [r["key"] for r in await db.fetchall("SELECT key FROM settings ORDER BY key")]
+    keys = list(dict.fromkeys(list(ORDER) + db_keys))
+    for key in keys:
         value = await get_setting(key, "")
         shown = value if len(value) < 40 else value[:37] + "…"
         lines.append(f"▪️ {SETTING_LABELS.get(key, key)}: <code>{shown or '—'}</code>")

@@ -49,6 +49,7 @@ def root_kb(perms: set) -> InlineKeyboardMarkup:
         rows.append([("👥 کاربران", "a|usr")])
     if show("economy"):
         rows.append([("🪙 اقتصاد و سکه شاهی", "a|eco")])
+        rows.append([("🧾 فیش‌های در انتظار تأیید", "a|rcp|pending|0")])
     if show("countries"):
         rows.append([("🏳 کشورها و قیمت‌ها", "a|grp|countries")])
     if show("military"):

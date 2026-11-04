@@ -103,7 +103,7 @@ export const UsersManager: React.FC = () => {
   const [newUsername, setNewUsername] = useState<string>('');
   const [newFullName, setNewFullName] = useState<string>('');
   const [newCountryId, setNewCountryId] = useState<string>('1');
-  const [newMoney, setNewMoney] = useState<string>('50000000');
+  const [newMoney, setNewMoney] = useState<string>('200000000');
   const [newCoins, setNewCoins] = useState<string>('10');
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -1602,7 +1602,7 @@ export const UsersManager: React.FC = () => {
                   className="mt-0.5 accent-amber-500"
                 />
                 <div>
-                  <div className="font-bold text-white text-xs">فقط تنظیم پول همه به ۵۰ میلیون پایه</div>
+                  <div className="font-bold text-white text-xs">فقط تنظیم پول همه به بودجه اولیهٔ بازی</div>
                   <div className="text-[11px] text-slate-400">موجودی پول همه ۵۰٬۰۰۰٬۰۰۰ شده، سکه‌ها حفظ می‌شوند.</div>
                 </div>
               </label>

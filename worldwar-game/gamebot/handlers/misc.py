@@ -6,8 +6,8 @@ from aiogram.types import CallbackQuery, Message
 
 from core.db import db, get_setting
 from core.economy import bump_progress, get_progress
-from core.utils import fmt, day_str, iso, tehran
-from gamebot.common import back_row, kb, send_home
+from core.utils import fmt, fmt_money, day_str, iso, tehran
+from gamebot.common import back_row, kb, main_menu_kb, send_home
 
 router = Router()
 
@@ -39,7 +39,7 @@ async def missions_menu(call: CallbackQuery):
         done = current >= (m["target_value"] or 1)
         rewards = []
         if m["reward_money"]:
-            rewards.append(f"💰 {fmt(m['reward_money'])}")
+            rewards.append(f"💰 {fmt_money(m['reward_money'])}")
         if m["reward_coins"]:
             rewards.append(f"🪙 {fmt(m['reward_coins'])}")
         status = "✅ گرفته شده" if claimed else ("🟢 آماده" if done else f"⚙️ {fmt(current)}/{fmt(m['target_value'])}")
@@ -195,17 +195,6 @@ async def coins_amount_input(message: Message, state: FSMContext):
         await db.execute("UPDATE users SET money=money+? WHERE id=?", (amount * rate, message.from_user.id))
         await send_home(message, 
             f"✅ <b>{fmt(amount)} سکه شاهی</b> به <b>{fmt(amount * rate)}</b> پول پایه تبدیل شد.")
-        await coins_menu(_FakeCall(message))
-
-
-class _FakeCall:
-    def __init__(self, message: Message):
-        self.message = message
-        self.from_user = message.from_user
-        self.bot = message.bot
-
-    async def answer(self, *_a, **_k):
-        pass
 
 
 @router.callback_query(F.data == "g|coinconv")
@@ -243,10 +232,15 @@ SUP_KINDS = {"complaint": "😠 شکایت از کشور دیگر", "idea": "�
 
 
 @router.callback_query(F.data == "g|sup")
-async def support_menu(call: CallbackQuery):
+def support_rows() -> list:
     rows = [[(title, f"g|sup|{key}")] for key, title in SUP_KINDS.items()]
     rows.append([("🧾 تیکت‌های من", "g|suphist")])
     rows.append(back_row("g|main"))
+    return rows
+
+
+async def support_menu(call: CallbackQuery):
+    rows = support_rows()
     await call.answer()
     await call.message.edit_text(
         "🛟 <b>پشتیبانی</b>\n\nیکی از موارد را انتخاب کنید:", reply_markup=kb(rows))
@@ -285,8 +279,12 @@ async def support_photo(message: Message, state: FSMContext):
     await db.execute(
         "INSERT INTO tickets(user_id, kind, text, photo_file_id) VALUES(?,?,?,?)",
         (message.from_user.id, data["sup_kind"], data["sup_text"], message.photo[-1].file_id))
-    await send_home(message, "✅ تیکت شما ثبت شد و برای پشتیبانی ارسال شد. پاسخ به‌زودی دریافت می‌کنید. 🙏")
-    await support_menu(_FakeCall(message))
+    await send_home(
+        message,
+        "✅ تیکت شما ثبت شد و برای پشتیبانی ارسال شد. پاسخ به‌زودی دریافت می‌کنید. 🙏\n\n"
+        "🛟 <b>پشتیبانی</b>",
+        reply_markup=kb(support_rows()),
+    )
 
 
 @router.message(SupFSM.photo)
@@ -321,3 +319,19 @@ async def support_history(call: CallbackQuery):
             lines.append(f"   💬 پاسخ: {t['reply'][:200]}")
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb([back_row("g|sup")]))
+
+
+# ─── عکس بدون سفارش فعال ───
+
+
+@router.message(F.photo)
+async def photo_without_order(message: Message, state: FSMContext):
+    """اگر بازیکن خارج از هر مرحله‌ای عکس (فیش) بفرستد، راهنمایی شود نه اینکه پیامش نادیده بماند."""
+    await state.clear()
+    await send_home(
+        message,
+        "📸 عکس شما دریافت شد، اما هیچ سفارش فعالی برای ثبت فیش پیدا نشد.\n\n"
+        "برای ثبت فیش: 🪙 <b>سکه شاهی</b> → خرید سکه/پکیج → سپس عکس فیش را بفرستید.\n"
+        "برای خرید کشور هم از 🏳 <b>کشورهای ویژه</b> → پرداخت با پول واقعی اقدام کنید.",
+        reply_markup=main_menu_kb(),
+    )

@@ -34,7 +34,7 @@ async def currency_score(user_id: int) -> int:
     atk, dfn, _ = await army_power(user_id)
     money = (user or {}).get("money", 0)
     trade = await trade_value_24h(user_id)
-    economy = min(300.0, trade / 1_000_000 + money / 50_000_000)
+    economy = min(300.0, trade / 1_000_000 + money / 200_000_000)
     military = min(300.0, (atk + dfn) / 100_000)
     sat = state.get("satisfaction") or 0
     return int(round(economy + military + sat))

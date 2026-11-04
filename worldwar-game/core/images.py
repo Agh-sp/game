@@ -23,7 +23,21 @@ IMAGE_SECTIONS = {
     "currency": "💵 ارز اصلی",
     "season": "🎬 سیزن جدید",
     "flag": "🏳 پرچم کشورها",
-    "general": "📦 عمومی",
+    # بخش‌های رویدادهای بازی (اعلان جنگ، حمله، سازمان ملل، سایبری، پروژه‌ها)
+    "war_declare": "⚔️ اعلان جنگ",
+    "war_attack": "💥 حمله و گزارش نبرد",
+    "un": "🗳 سازمان ملل و رای‌گیری",
+    "cyber": "🕶 عملیات سایبری",
+    "project": "🏗 پروژه و ساختمان",
+    "government": "🏛 حکومت و دین",
+    "base": "🏕 پایگاه نظامی",
+    "tax": "💰 مالیات و درآمد",
+    "daily": "📊 گزارش روزانه",
+    "statement": "📢 بیانیه رسمی کشور",
+    "politics": "🏛 سیاست، رهبری و انتخابات",
+    "revolution": "🔥 انقلاب و ناآرامی",
+    "oil": "🛢 نفت و تجارت خودکار",
+    "general": "📦 عمومی (پشتیبان همه پیام‌ها)",
 }
 
 
@@ -77,28 +91,42 @@ def channel_entry_markup(bot_username: str):
 
 async def send_with_image(bot, chat_id: str | int, text: str,
                           section: str = "", name: str = "",
-                          reply_markup=None) -> None:
-    """ارسال پیام به چت/کانال — اگر عکس موجود بود با عکس (کپشن)، وگرنه متن؛ همراه با دکمه ورود به ربات."""
+                          reply_markup=None) -> object | None:
+    """ارسال پیام به چت/کانال — اگر عکس موجود بود با عکس (کپشن)، وگرنه متن؛ همراه با دکمه ورود به ربات.
+
+    ترتیب انتخاب عکس: اسم دقیق → عکس همان بخش → عکس «عمومی» (پشتیبان).
+    اگر متن از ۱۰۲۴ کاراکتر (سقف کپشن تلگرام) بیشتر بود، عکس جدا و متن جدا ارسال می‌شود
+    تا هیچ‌وقت بخشی از پیام حذف نشود.
+    """
     username = await get_channel_bot_username(bot)
     footer = f"\n\n🎮 <b>ورود به ربات:</b> @{username}"
     full_text = text if f"@{username}" in text else (text + footer)
     rm = reply_markup or channel_entry_markup(username)
 
     img = await get_image(section, name)
+    if not img and section:
+        img = await get_image("general")
+    file_id = (img or {}).get("file_id") if img else ""
     try:
-        if img and img["file_id"]:
-            caption = full_text[:1024]
-            await bot.send_photo(chat_id, img["file_id"], caption=caption, reply_markup=rm)
-        else:
-            await bot.send_message(chat_id, full_text, reply_markup=rm)
-    except Exception:
-        try:
-            await bot.send_message(chat_id, full_text, reply_markup=rm)
-        except Exception:
+        if file_id and len(full_text) <= 1024:
+            return await bot.send_photo(chat_id, file_id, caption=full_text, reply_markup=rm)
+        elif file_id:
+            # متن بلندتر از سقف کپشن: ابتدا عکس، سپس کل متن
             try:
-                await bot.send_message(chat_id, full_text)
+                await bot.send_photo(chat_id, file_id, caption=text[:900] + "…")
             except Exception:
                 pass
+            return await bot.send_message(chat_id, full_text, reply_markup=rm)
+        else:
+            return await bot.send_message(chat_id, full_text, reply_markup=rm)
+    except Exception:
+        try:
+            return await bot.send_message(chat_id, full_text, reply_markup=rm)
+        except Exception:
+            try:
+                return await bot.send_message(chat_id, full_text)
+            except Exception:
+                return None
 
 
 async def announce_img(bot, text: str, section: str = "", name: str = "", reply_markup=None) -> None:
@@ -128,9 +156,13 @@ async def get_country_flag_photo(country: dict) -> str | None:
 
 
 async def announce_statement(bot, text: str, country: dict, gov: dict | None = None) -> None:
-    """اعلان بیانیه رسمی کشور در کانال همراه با پرچم رسمی و دکمه ورود به ربات."""
+    """اعلان بیانیه رسمی کشور در کانال همراه با عکس بیانیه/پرچم رسمی و دکمه ورود به ربات."""
     channel = await get_setting("announcement_channel", "")
     if not channel:
+        return
+    # اگر ادمین برای بخش «بیانیه» عکسی گذاشته باشد همان استفاده می‌شود
+    if await get_image("statement"):
+        await send_with_image(bot, channel, text, "statement")
         return
     username = await get_channel_bot_username(bot)
     footer = f"\n\n🎮 <b>ورود به ربات:</b> @{username}"

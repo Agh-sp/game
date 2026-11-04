@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name TEXT DEFAULT '',
   joined_at TEXT DEFAULT (datetime('now')),
   royal_coins INTEGER DEFAULT 0,
-  money INTEGER DEFAULT 50000000,
+  money INTEGER DEFAULT 200,
   country_id INTEGER,
   country_taken_at TEXT,
   banned INTEGER DEFAULT 0
@@ -40,7 +40,12 @@ CREATE TABLE IF NOT EXISTS countries (
   has_sea INTEGER DEFAULT 1,
   region TEXT DEFAULT 'آسیا',
   is_active INTEGER DEFAULT 1,
-  owner_id INTEGER
+  owner_id INTEGER,
+  gdp_factor REAL DEFAULT 1,
+  oil_income_base INTEGER DEFAULT 2,
+  leader_name TEXT DEFAULT '',
+  leader_title TEXT DEFAULT 'رئیس‌جمهور',
+  leader_since TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS states (
@@ -502,6 +507,33 @@ CREATE TABLE IF NOT EXISTS rescue_donations (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS revolutions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  country_id INTEGER,
+  severity INTEGER DEFAULT 60,
+  started_at TEXT,
+  ends_at TEXT,
+  status TEXT DEFAULT 'active',
+  trigger TEXT DEFAULT '',
+  outcome TEXT DEFAULT '',
+  money_spent INTEGER DEFAULT 0,
+  troops_lost INTEGER DEFAULT 0,
+  force_block_until TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS oil_business (
+  user_id INTEGER PRIMARY KEY,
+  level INTEGER DEFAULT 1,
+  auto_sell INTEGER DEFAULT 0,
+  last_sale_at TEXT,
+  last_income INTEGER DEFAULT 0,
+  total_income INTEGER DEFAULT 0,
+  sales INTEGER DEFAULT 0,
+  barrels_sold INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS oil_offers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   seller_id INTEGER,
@@ -577,6 +609,13 @@ MIGRATIONS = [
     ("images", "country_id", "INTEGER DEFAULT 0"),
     ("equipment", "subcategory", "TEXT DEFAULT ''"),
     ("rescue_campaigns", "ends_at", "TEXT"),
+    ("battles", "strategy", "TEXT DEFAULT ''"),
+    ("countries", "gdp_factor", "REAL DEFAULT 1"),
+    ("countries", "oil_income_base", "INTEGER DEFAULT 2"),
+    ("countries", "leader_name", "TEXT DEFAULT ''"),
+    ("countries", "leader_title", "TEXT DEFAULT 'رئیس‌جمهور'"),
+    ("countries", "leader_since", "TEXT DEFAULT ''"),
+    ("revolutions", "force_block_until", "TEXT"),
 ]
 
 
@@ -660,6 +699,18 @@ async def get_setting(key: str, default: str = "") -> str:
     return (row["value"] if row else default) or default
 
 
+INITIAL_MONEY = 200_000_000   # ۲۰۰ میلیون — بودجه اولیه پیش‌فرض
+
+
+async def get_initial_money() -> int:
+    """بودجه اولیه هر بازیکن تازه‌وارد (قابل تنظیم از پنل ادمین)."""
+    try:
+        value = int(float(await get_setting("initial_money", str(INITIAL_MONEY))))
+    except (TypeError, ValueError):
+        return INITIAL_MONEY
+    return value if value > 0 else INITIAL_MONEY
+
+
 async def set_setting(key: str, value: str) -> None:
     await db.execute(
         "INSERT INTO settings(key, value) VALUES(?, ?) "
@@ -696,16 +747,80 @@ async def init_db() -> None:
             value = texts.GUIDE
         await db.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (key, value))
 
-    # یکپارچه‌سازی و رفع باگ تلاقی مالکیت کشورها با کاربران فعال
-    await db.execute("""
-        UPDATE countries SET owner_id = (
-            SELECT u.id FROM users u 
-            WHERE u.country_id = countries.id AND u.banned = 0 
-            ORDER BY u.country_taken_at DESC LIMIT 1
-        )
-        WHERE id IN (SELECT DISTINCT country_id FROM users WHERE country_id IS NOT NULL AND banned = 0)
-          AND (owner_id IS NULL OR owner_id = 0)
-    """)
+    # مهاجرت مقدار قدیمی بودجه اولیه (۲۰۰) به مقیاس میلیونی (۲۰۰٫۰۰۰٫۰۰۰)
+    try:
+        row = await db.fetchone("SELECT value FROM settings WHERE key='initial_money'")
+        if row and row["value"]:
+            try:
+                old_value = float(row["value"])
+            except (TypeError, ValueError):
+                old_value = None
+            if old_value is not None and old_value < 1_000:
+                await set_setting("initial_money", str(INITIAL_MONEY))
+    except Exception:
+        pass
+
+    # مهاجرت قاعدهٔ قدیمی تصاحب تنگه (۲.۵ برابر) به نبرد واقعی (۱.۳ برابر)
+    try:
+        row = await db.fetchone("SELECT value FROM settings WHERE key='strait_capture_ratio'")
+        if row and str(row["value"]).strip() in ("2.5", "2,5"):
+            await set_setting("strait_capture_ratio", "1.3")
+    except Exception:
+        pass
+
+    # یکپارچه‌سازی مالکیت کشورها با کاربران (مالکیت دوگانه، مالک بی‌کاربر و ...)
+    await sync_country_owners()
+
+
+async def sync_country_owners() -> None:
+    """هم‌ترازکردن countries.owner_id با users.country_id.
+
+    باگ‌های رایجی که این تابع رفع می‌کند:
+      • کاربری کشور دارد ولی owner_id کشور خالی است → کشور در لیست اعلان جنگ/سایبری دیده نمی‌شد.
+      • دو کاربر هم‌زمان یک کشور را claim کرده‌اند → کشور دو مالک داشت و جنگ روی id اشتباه ثبت می‌شد.
+      • کشور owner_id دارد ولی کاربرش country_id ندارد (انتساب از پنل ادمین) → کاربر کشور را از دست می‌داد.
+    """
+    try:
+        # ۱) کشورهایی که owner_id دارند ولی مالکشان country_id ندارد → به مالک برگردانده می‌شود
+        await db.execute("""
+            UPDATE users SET country_id = (
+                SELECT c.id FROM countries c
+                WHERE c.owner_id = users.id AND (users.country_id IS NULL OR users.country_id = 0)
+                ORDER BY c.id LIMIT 1
+            )
+            WHERE (country_id IS NULL OR country_id = 0)
+              AND EXISTS (SELECT 1 FROM countries c WHERE c.owner_id = users.id)
+              AND banned = 0
+        """)
+        # ۲) مالکیت دوگانه: اگر owner_id کشور یکی از claimant ها باشد همان می‌ماند،
+        #    در غیر این صورت جدیدترین claimant مالک می‌شود و بقیه آزاد می‌شوند
+        await db.execute("""
+            UPDATE users SET country_id = NULL
+            WHERE country_id IS NOT NULL AND banned = 0 AND id NOT IN (
+                SELECT COALESCE(
+                    (SELECT u2.id FROM users u2
+                     WHERE u2.country_id = c.id AND u2.banned = 0 AND u2.id = c.owner_id LIMIT 1),
+                    (SELECT u3.id FROM users u3
+                     WHERE u3.country_id = c.id AND u3.banned = 0
+                     ORDER BY u3.country_taken_at DESC, u3.id DESC LIMIT 1)
+                )
+                FROM countries c
+                WHERE c.id IN (SELECT country_id FROM users WHERE country_id IS NOT NULL AND banned = 0)
+            )
+        """)
+        # ۳) پر کردن owner_id خالی از claimant های واقعی
+        await db.execute("""
+            UPDATE countries SET owner_id = (
+                SELECT u.id FROM users u
+                WHERE u.country_id = countries.id AND u.banned = 0
+                ORDER BY u.country_taken_at DESC, u.id DESC LIMIT 1
+            )
+            WHERE EXISTS (SELECT 1 FROM users u WHERE u.country_id = countries.id AND u.banned = 0)
+              AND (owner_id IS NULL OR owner_id = 0)
+        """)
+    except Exception:
+        import logging
+        logging.getLogger("db").exception("sync_country_owners failed")
 
 
 DEFAULT_SETTINGS = {
@@ -720,6 +835,10 @@ DEFAULT_SETTINGS = {
     "bot_off": "0",
     "trade_tax_percent": "5",
     "income_base": "100",
+    # بودجه اولیه‌ای که هر بازیکن تازه‌وارد دریافت می‌کند (قابل تغییر از پنل ادمین)
+    "initial_money": "200000000",
+    # رای‌گیری مجوز جنگ سازمان ملل — ۳۰ دقیقه
+    "war_vote_minutes": "30",
     "vote_duration_hours": "24",
     "country_change_hours": "8",
     "cyber_cooldown_hours": "6",
@@ -748,9 +867,24 @@ DEFAULT_SETTINGS = {
     # ── سازمان نجات ──
     "rescue_vote_hours": "24",
     "rescue_payout_percent": "10",
+    # ── رهبری، ترور و انقلاب ──
+    "revolution_minutes": "30",              # فرصت مهار انقلاب (دقیقه)
+    "revolution_initial_severity": "65",     # شدت اولیه انقلاب
+    "revolution_income_penalty": "0.55",     # ضریب درآمد در زمان انقلاب (۵۵٪)
+    "revolution_success_satisfaction": "20", # افت رضایت در صورت پیروزی انقلاب
+    "revolution_success_money_pct": "0.15",  # غارت خزانه در صورت پیروزی انقلاب
+    "assassination_cooldown_hours": "6",
+    # ── کسب‌وکار نفت (ارتقا + فروش خودکار) ──
+    "oil_auto_sell_minutes": "10",           # هر ۱۰ دقیقه درآمد فروش نفت
+    "oil_level_max": "12",                   # سقف ارتقای تجهیزات استخراج
+    "oil_level_base_cost": "30000000",       # هزینه ارتقا از سطح ۱ به ۲
+    "oil_level_cost_factor": "1.6",          # ضریب گران‌شدن هر سطح بعدی
+    "oil_level_barrel_bonus": "0.15",        # +۱۵٪ استخراج به ازای هر سطح
+    "oil_level_income_bonus": "0.12",        # +۱۲٪ درآمد فروش به ازای هر سطح
+    "oil_sale_need_barrels": "5000",         # بشکه مرجع برای فروش کامل
     # ── تنگه‌ها ──
     "strait_min_naval": "500",              # حداقل قدرت دریایی برای تصاحب تنگه آزاد
-    "strait_capture_ratio": "2.5",           # ضریب تصاحب تنگه دارای مالک
+    "strait_capture_ratio": "1.3",           # حداقل نسبت توان دریایی برای حمله به تنگه دارای مالک
     "strait_toll_percent": "1.5",            # عوارض درآمد غیرمالیاتی
     # ── ارز ──
     "main_currency": "",                     # نام ارز اصلی فعلی بازی

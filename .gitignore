@@ -6,3 +6,14 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+worldwar-game/backups/*.db
+
+# SQLite side files
+worldwar-game/*.db-wal
+worldwar-game/*.db-shm

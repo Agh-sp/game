@@ -41,6 +41,14 @@ def hours_left(s: str | None) -> float:
     return max(0.0, (dt - now()).total_seconds() / 3600)
 
 
+def hours_ago(s: str | None) -> float:
+    """چند ساعت از یک زمان گذشته است (برای cooldown‌ها؛ آینده → ۰)."""
+    dt = parse(s)
+    if dt is None:
+        return 1_000_000.0
+    return max(0.0, (now() - dt).total_seconds() / 3600)
+
+
 def fmt_hm(hours: float) -> str:
     """مدت باقی‌مانده به شکل خوانا."""
     if hours <= 0:
@@ -74,6 +82,40 @@ def fmt(n) -> str:
         return f"{int(n):,}"
     except (TypeError, ValueError):
         return str(n)
+
+
+def _trim(x: float) -> str:
+    """عدد اعشاری بدون صفرهای انتهایی."""
+    if abs(x - round(x)) < 0.05:
+        return f"{int(round(x)):,}"
+    return f"{round(x, 2):,}".rstrip("0").rstrip(".")
+
+
+def fmt_money(n) -> str:
+    """نمایش مبلغ به شکل خوانا و «میلیونی» — مثلاً ۲۵۰ میلیون یا ۱.۵ میلیارد.
+
+    بازیکن‌ها مبالغ را در مقیاس میلیون می‌بینند، نه با ۹ رقم صفر.
+    """
+    try:
+        v = float(n or 0)
+    except (TypeError, ValueError):
+        return str(n)
+    neg = "-" if v < 0 else ""
+    v = abs(v)
+    if v >= 1_000_000_000:
+        return f"{neg}{_trim(v / 1_000_000_000)} میلیارد"
+    if v >= 1_000_000:
+        return f"{neg}{_trim(v / 1_000_000)} میلیون"
+    if v >= 1_000:
+        return f"{neg}{_trim(v / 1_000)} هزار"
+    return f"{neg}{_trim(v)}"
+
+
+def fmt_money_full(n) -> str:
+    """نمای میلیونی + عدد دقیق داخل پرانتز (برای گزارش‌های مالی)."""
+    exact = fmt(n)
+    short = fmt_money(n)
+    return short if short == exact else f"{short} ({exact})"
 
 
 def clamp(v, lo, hi):

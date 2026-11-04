@@ -34,6 +34,20 @@ else:
     DB_PATH = str((BASE_DIR / "wwgame.db").resolve())
 
 
+# ── Webhook (اجرای ربات‌ها روی یک آدرس عمومی به‌جای polling) ──
+WEBHOOK_ENABLED = os.getenv("WEBHOOK_ENABLED", "0").strip() in ("1", "true", "True", "yes")
+# آدرس عمومی اپلیکیشن (همان Web App) — مثلاً https://myapp.example.com
+PUBLIC_BASE_URL = (os.getenv("WEBHOOK_BASE_URL") or os.getenv("PUBLIC_URL") or "").strip().rstrip("/")
+WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8080") or 8080)
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0") or "0.0.0.0"
+# کلید امنیتی تلگرام برای وبهوک (هدر X-Telegram-Bot-Api-Secret-Token)
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
+WEBHOOK_PATH_GAME = "/webhook/game"
+WEBHOOK_PATH_ADMIN = "/webhook/admin"
+# فاصله پینگ سلامت (دقیقه) — برای زنده نگه‌داشتن سرویس
+KEEPALIVE_MINUTES = int(os.getenv("KEEPALIVE_MINUTES", "10") or 10)
+
+
 def check_tokens(admin: bool = True) -> None:
     """در زمان اجرا بررسی می‌کند توکن‌ها تنظیم شده باشند."""
     missing = []

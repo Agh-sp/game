@@ -8,9 +8,9 @@ from aiogram.types import CallbackQuery, Message
 from adminbot.auth import has
 from adminbot.crud import cd, kb
 from adminbot.tools import log_action, notify_user
-from core.db import db
+from core.db import db, get_initial_money
 from core.economy import army_power, get_country
-from core.utils import fmt, tehran
+from core.utils import fmt, fmt_money, tehran
 
 router = Router()
 PAGE = 8
@@ -340,8 +340,8 @@ async def user_reset(call: CallbackQuery, perms: set):
     if user["country_id"]:
         await db.execute("UPDATE countries SET owner_id=NULL WHERE owner_id=?", (uid,))
     await db.execute(
-        "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, money=50000000, banned=0 "
-        "WHERE id=?", (uid,))
+        "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, money=?, banned=0 "
+        "WHERE id=?", (await get_initial_money(), uid))
     await db.execute("DELETE FROM player_assets WHERE user_id=?", (uid,))
     await db.execute("DELETE FROM player_projects WHERE user_id=?", (uid,))
     await db.execute("DELETE FROM soldier_trainings WHERE user_id=?", (uid,))
@@ -390,13 +390,17 @@ async def user_receipts(call: CallbackQuery, perms: set):
     lines = [f"🧾 <b>فیش‌های کاربر {uid}</b>\n"]
     if not rows:
         lines.append("— ندارد —")
+    buttons = []
     for r in rows:
         what = f"کشور(#{r['country_id']})" if r["kind"] == "country" else f"{fmt(r['coins'])} سکه"
         lines.append(f"#{r['id']} {what} — {fmt(r['toman'])} تومان — {r['status']} — "
                      f"{tehran(r['created_at'])}")
+        if r["status"] == "pending" and has(perms, "economy"):
+            buttons.append([(f"✅ تأیید فیش #{r['id']}", f"a|rcpok|{r['id']}"),
+                            (f"❌ رد #{r['id']}", f"a|rcpno|{r['id']}")])
+    buttons.append([("◀️ پروفایل کاربر", f"a|ucard|{uid}")])
     await call.answer()
-    await call.message.edit_text("\n".join(lines), reply_markup=kb([
-        [("◀️ پروفایل کاربر", f"a|ucard|{uid}")]]))
+    await call.message.edit_text("\n".join(lines), reply_markup=kb(buttons))
 
 
 # ─── ریست پول و سکه شاهی همه کاربران ───
@@ -425,9 +429,11 @@ async def build_reset_wealth_payload() -> tuple[str, any]:
         "عملیات مورد نظر خود را با دقت انتخاب نمایید:"
     )
     markup = kb([
-        [("🔥 ریست کامل هر دو (سکه=۰ | پول=۵۰M)", "a|conf_reset_wealth|both_default")],
+        [(f"🔥 ریست کامل هر دو (سکه=۰ | پول={fmt_money(await get_initial_money())})",
+          "a|conf_reset_wealth|both_default")],
         [("🪙 فقط صفر کردن سکه شاهی همه (۰ سکه)", "a|conf_reset_wealth|coins_zero")],
-        [("💰 فقط ریست پول همه به ۵۰ میلیون پایه", "a|conf_reset_wealth|money_default")],
+        [(f"💰 فقط ریست پول همه به {fmt_money(await get_initial_money())} پایه",
+          "a|conf_reset_wealth|money_default")],
         [("🚫 فقط صفر کردن موجودی پول همه (۰ تومان)", "a|conf_reset_wealth|money_zero")],
         [("◀️ بازگشت به منوی کاربران", "a|usr"), ("◀️ پنل اصلی", "a|root")],
     ])
@@ -481,14 +487,16 @@ async def reset_wealth_execute(call: CallbackQuery, perms: set):
     u_total = (await db.fetchone("SELECT COUNT(*) c FROM users"))["c"]
 
     if mode == "both_default":
-        await db.execute("UPDATE users SET royal_coins=0, money=50000000")
-        desc = "ریست کامل پول به ۵۰ میلیون و سکه شاهی به ۰ برای همه کاربران"
+        initial = await get_initial_money()
+        await db.execute("UPDATE users SET royal_coins=0, money=?", (initial,))
+        desc = f"ریست کامل پول به {fmt(initial)} و سکه شاهی به ۰ برای همه کاربران"
     elif mode == "coins_zero":
         await db.execute("UPDATE users SET royal_coins=0")
         desc = "صفر کردن سکه شاهی تمام کاربران"
     elif mode == "money_default":
-        await db.execute("UPDATE users SET money=50000000")
-        desc = "ریست پول پایه همه کاربران به ۵۰ میلیون"
+        initial = await get_initial_money()
+        await db.execute("UPDATE users SET money=?", (initial,))
+        desc = f"ریست پول پایه همه کاربران به {fmt(initial)}"
     elif mode == "money_zero":
         await db.execute("UPDATE users SET money=0")
         desc = "صفر کردن موجودی پول همه کاربران"
@@ -587,7 +595,8 @@ async def reset_all_players_execute(call: CallbackQuery, perms: set):
 
     # 2. Reset users table
     await db.execute(
-        "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, money=50000000, banned=0"
+        "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, money=?, banned=0",
+        (await get_initial_money(),),
     )
 
     # 3. Clean all gameplay dependent tables
