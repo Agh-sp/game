@@ -1,0 +1,158 @@
+"""ویرایشگر هدایت‌شده تنظیمات بازی (با توضیح فارسی هر کلید)."""
+from aiogram import F, Router
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, Message
+
+from adminbot.auth import has
+from adminbot.crud import cd, kb
+from adminbot.entities import SETTING_LABELS
+from adminbot.tools import log_action
+from core.db import db, get_setting, set_setting
+from core.utils import fmt
+
+router = Router()
+
+ORDER = ["coin_price_toman", "coins_to_money_rate", "c2c_card", "c2c_holder",
+         "join_channels", "announcement_channel", "start_text", "guide_text",
+         "income_base", "income_interval_minutes", "food_price_per_ton", "trade_tax_percent",
+         "vote_duration_hours", "country_change_hours", "cyber_cooldown_hours", "bot_off",
+         "sec_negotiation", "sec_direct_trade", "sec_rescue_sale", "sec_straits",
+         "sec_oil", "sec_rescue_org",
+         "oil_rig_barrels_per_tick", "oil_exploration_cost", "oil_exploration_add",
+         "oil_price_per_barrel",
+         "rescue_energy_price", "rescue_water_price", "rescue_gas_price", "rescue_oil_price",
+         "rescue_vote_hours", "rescue_payout_percent",
+         "strait_min_naval", "strait_capture_ratio", "strait_toll_percent",
+         "season_vote_hours", "season_required_votes", "daily_report_hour"]
+
+HELP = {
+    "coin_price_toman": "قیمت فروش هر سکه شاهی به تومان (مثلاً 1000 یا 34000000)",
+    "coins_to_money_rate": "هر سکه شاهی در تبدیل داخلی چند پول پایه می‌ارزد",
+    "c2c_card": "شماره کارت برای پرداخت‌های کارت به کارت",
+    "c2c_holder": "نام صاحب کارت",
+    "join_channels": "کانال‌های عضویت اجباری — JSON مثل [\"@channel1\",\"@group2\"] — خالی یعنی بدون عضویت اجباری",
+    "announcement_channel": "کانال اعلانات (احداث/جنگ/بیانیه/رای‌گیری) مثل @mychannel — ربات باید ادمین کانال باشد",
+    "start_text": "متن خوش‌آمد /start قبل از بررسی عضویت",
+    "guide_text": "متن کامل راهنمای بازی که در بخش «راهنمای بازی» نمایش داده می‌شود",
+    "income_base": "ضریب درآمد روزانه کشورها (پیش‌فرض ۱۰۰)",
+    "food_price_per_ton": "قیمت خرید هر تن غذا",
+    "trade_tax_percent": "مالیات معاملات بازار (درصد)",
+    "vote_duration_hours": "مدت رای‌گیری‌های سازمان ملل (ساعت)",
+    "country_change_hours": "فاصله مجاز تغییر کشور (ساعت) — طبق قانون بازی ۸",
+    "cyber_cooldown_hours": "فاصله بین دو حمله سایبری به یک کشور (ساعت)",
+    "bot_off": "۱ = بازی خاموش / ۰ = روشن",
+    "income_interval_minutes": "فاصله پرداخت خودکار درآمد/مالیات/یارانه (دقیقه — پیش‌فرض ۳۰)",
+    "sec_negotiation": "۱ = بخش مذاکره روشن / ۰ = خاموش",
+    "sec_direct_trade": "۱ = تجارت مستقیم روشن / ۰ = خاموش",
+    "sec_rescue_sale": "۱ = فروش انرژی به سازمان نجات روشن / ۰ = خاموش",
+    "sec_straits": "۱ = کل بخش تنگه‌ها روشن / ۰ = خاموش",
+    "sec_oil": "۱ = بخش نفت روشن / ۰ = خاموش",
+    "sec_rescue_org": "۱ = سازمان نجات روشن / ۰ = خاموش",
+    "oil_rig_barrels_per_tick": "هر دکل نفتی در هر تیک چند بشکه استخراج می‌کند (پیش‌فرض ۵۰۰)",
+    "oil_exploration_cost": "هزینه اکتشاف نفتی (پول)",
+    "oil_exploration_add": "در اکتشاف موفق چند بشکه به مخزن اضافه می‌شود",
+    "oil_price_per_barrel": "ارزش پولی هر بشکه نفت در آمار تجارت",
+    "rescue_energy_price": "قیمت خرید هر kWh برق توسط سازمان نجات",
+    "rescue_water_price": "قیمت خرید هر واحد آب توسط سازمان نجات",
+    "rescue_gas_price": "قیمت خرید هر واحد گاز توسط سازمان نجات",
+    "rescue_oil_price": "قیمت خرید هر بشکه نفت توسط سازمان نجات",
+    "rescue_vote_hours": "مدت رای‌گیری هر کمپین سازمان نجات (ساعت)",
+    "rescue_payout_percent": "درصد پرداخت ذخیره سازمان به کشور برنده (پیش‌فرض ۱۰)",
+    "strait_min_naval": "حداقل قدرت دریایی برای تصاحب تنگه بدون مالک (پیش‌فرض ۵۰۰)",
+    "strait_capture_ratio": "برای گرفتن تنگه دارای مالک چند برابر قدرت دریایی مالک لازم است (پیش‌فرض ۲.۵)",
+    "strait_toll_percent": "عوارض تنگه از درآمد غیرمالیاتی کشورها (٪ — پیش‌فرض ۱.۵)",
+    "season_vote_hours": "مدت رای‌گیری سیزن در کانال (ساعت)",
+    "season_required_votes": "حداقل رأی برای انتخاب سیزن جدید (پیش‌فرض ۱۰)",
+    "daily_report_hour": "ساعت ارسال گزارش روزانه به ادمین‌ها (به وقت تهران)",
+}
+
+
+class SetFSM(StatesGroup):
+    value = State()
+
+
+@router.message(Command("settings"))
+async def cmd_settings(message: Message, perms: set):
+    if not has(perms, "settings"):
+        return await message.answer("⛔️ دسترسی ندارید")
+    await message.answer(**await settings_menu_payload())
+
+
+async def settings_menu_payload() -> dict:
+    lines = ["⚙️ <b>تنظیمات بازی</b>\n"]
+    buttons = []
+    for key in ORDER:
+        value = await get_setting(key, "")
+        shown = value if len(value) < 40 else value[:37] + "…"
+        lines.append(f"▪️ {SETTING_LABELS.get(key, key)}: <code>{shown or '—'}</code>")
+        buttons.append([(SETTING_LABELS.get(key, key)[:45], f"a|sete|{key}")])
+    buttons.append([("✏️ ویرایش خام جدول تنظیمات", cd("set", "p", 0))])
+    buttons.append([("◀️ بازگشت", "a|root")])
+    return {"text": "\n".join(lines), "reply_markup": kb(buttons)}
+
+
+@router.callback_query(F.data == "a|set")
+async def settings_menu(call: CallbackQuery, perms: set):
+    if not has(perms, "settings"):
+        return await call.answer("⛔️ دسترسی ندارید", show_alert=True)
+    payload = await settings_menu_payload()
+    await call.answer()
+    await call.message.edit_text(payload["text"], reply_markup=payload["reply_markup"])
+
+
+@router.callback_query(F.data.startswith("a|sete|"))
+async def setting_edit(call: CallbackQuery, state: FSMContext, perms: set):
+    if not has(perms, "settings"):
+        return await call.answer("⛔️ دسترسی ندارید", show_alert=True)
+    key = call.data.split("|")[2]
+    value = await get_setting(key, "")
+    await state.set_state(SetFSM.value)
+    await state.update_data(set_key=key)
+    await call.answer()
+    shown = value if len(value) < 600 else value[:600] + "…"
+    await call.message.edit_text(
+        f"⚙️ <b>{SETTING_LABELS.get(key, key)}</b>\n\n"
+        f"مقدار فعلی:\n<code>{shown or '—'}</code>\n\n"
+        f"💡 {HELP.get(key, '')}\n\n"
+        "مقدار جدید را بفرستید:\n برای انصراف /cancel",
+        reply_markup=kb([
+            [("♻️ بازنشانی راهنما (فقط guide_text)", "a|setrst")] if key == "guide_text" else
+            [("◀️ بازگشت", "a|set")],
+        ]))
+
+
+@router.message(SetFSM.value)
+async def setting_input(message: Message, state: FSMContext):
+    data = await state.get_data()
+    key = data.get("set_key")
+    await state.clear()
+    value = (message.text or "").strip()
+    if not value:
+        return await message.answer("❌ مقدار خالی است.")
+    if key == "join_channels":
+        import json
+        try:
+            json.loads(value)
+        except ValueError:
+            return await message.answer('❌ باید JSON معتبر باشد مثل ["@channel1"]')
+    if key == "bot_off" and value not in ("0", "1"):
+        return await message.answer("❌ فقط 0 یا 1")
+    await set_setting(key, value)
+    await log_action(message.from_user.id, "تنظیمات", f"{key} = {value[:100]}")
+    await message.answer(f"✅ «{SETTING_LABELS.get(key, key)}» آپدیت شد:\n<code>{value[:200]}</code>")
+    payload = await settings_menu_payload()
+    await message.answer(payload["text"], reply_markup=payload["reply_markup"])
+
+
+@router.callback_query(F.data == "a|setrst")
+async def guide_reset(call: CallbackQuery, perms: set):
+    if not has(perms, "settings"):
+        return await call.answer("⛔️ دسترسی ندارید", show_alert=True)
+    from core import texts
+    await set_setting("guide_text", texts.GUIDE)
+    await log_action(call.from_user.id, "تنظیمات", "بازنشانی متن راهنما")
+    await call.answer("♻️ راهنما به متن پیش‌فرض برگشت")
+    payload = await settings_menu_payload()
+    await call.message.edit_text(payload["text"], reply_markup=payload["reply_markup"])
