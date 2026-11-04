@@ -135,6 +135,11 @@ E("cnt", "countries", "کشورها", "🏳", "countries", [
     Field("is_active", "فعال", "bool"),
     Field("owner_id", "مالک (آیدی کاربر)", "int"),
     Field("flag_url", "عکس پرچم (لینک/شناسه تلگرام)", "text"),
+    Field("leader_title", "عنوان رهبر", "text", help="رئیس‌جمهور / نخست‌وزیر / پادشاه / شورا"),
+    Field("leader_name", "نام رهبر", "text", help="در صورت ترور، بازی این را خودکار تغییر می‌دهد"),
+    Field("leader_since", "رهبر از تاریخ", "text"),
+    Field("gdp_factor", "ضریب اقتصاد (درآمد)", "float", min=0),
+    Field("oil_income_base", "درآمد نفتی هر ۱۰ دقیقه (میلیون)", "int", min=0, max=100),
 ], list_title="flag || ' ' || name",
    list_sub="CASE WHEN is_special=1 THEN '👑 ویژه — ' || coin_price || ' سکه' ELSE '🆓 رایگان' END",
    search_cols=["name", "region"])
@@ -379,6 +384,29 @@ E("ofo", "oil_offers", "عرضه‌های نفت", "🛢", "trade", [
     Field("status", "وضعیت", "enum", options=["open", "done", "cancelled"]),
     Field("buyer_id", "خریدار", "int"),
 ], list_title="'#' || id || ' — ' || barrels || ' بشکه'")
+
+E("rev", "revolutions", "انقلاب‌ها", "🔥", "un", [
+    Field("user_id", "کاربر", "int"),
+    Field("country_id", "کشور", "ref", ref_table="countries", ref_title="name"),
+    Field("severity", "شدت انقلاب", "int", min=0, max=100),
+    Field("status", "وضعیت", "enum", options=["active", "resolved", "suppressed", "succeeded", "cancelled", "paused"]),
+    Field("trigger", "علت", "text"),
+    Field("ends_at", "مهلت", "text", help="YYYY-MM-DD HH:MM:SS"),
+    Field("outcome", "نتیجه", "text"),
+    Field("money_spent", "پول‌پاشی", "int"),
+    Field("troops_lost", "تلفات سرباز", "int"),
+], list_title="'🔥 #' || id || ' — ' || COALESCE(status,'')", can_create=False)
+
+E("obs", "oil_business", "کسب‌وکار نفت (ارتقا و فروش خودکار)", "🛢", "trade", [
+    Field("user_id", "کاربر", "int"),
+    Field("level", "سطح تجهیزات", "int", min=1, max=12),
+    Field("auto_sell", "فروش خودکار", "bool"),
+    Field("last_sale_at", "آخرین فروش", "text"),
+    Field("last_income", "درآمد آخر", "int"),
+    Field("total_income", "مجموع درآمد", "int"),
+    Field("sales", "تعداد فروش", "int"),
+    Field("barrels_sold", "بشکه فروخته‌شده", "int"),
+], list_title="'🛢 ' || user_id || ' — سطح ' || level")
 
 E("cur", "currency_requests", "درخواست‌های ارز", "💵", "economy", [
     Field("user_id", "کاربر", "int"),

@@ -25,22 +25,41 @@ async def _oil_menu(call: CallbackQuery):
     if await get_setting("sec_oil", "1") != "1":
         await call.answer("بخش نفت توسط ادمین خاموش شده است", show_alert=True)
         return
+    from core.oil import (ensure_business, income_estimate, level_max, per_rig_barrels,
+                          upgrade_cost)
     d = await oil_menu_data(call.from_user.id)
+    biz = await ensure_business(call.from_user.id)
+    level = int(biz.get("level") or 1)
+    cap = await level_max()
+    est = await income_estimate(call.from_user.id)
+    nxt_cost = await upgrade_cost(level) if level < cap else 0
+    per_rig = await per_rig_barrels(call.from_user.id)
+    auto = int(biz.get("auto_sell") or 0)
+    minutes = int(float(await get_setting("oil_auto_sell_minutes", "10")))
     text = (
-        "🛢 <b>بخش نفت</b>\n\n"
+        "🛢 <b>بخش نفت و تجارت خودکار</b>\n\n"
         f"⛏ مخزن زیرزمینی کشور: <b>{fmt(d['reserve'])}</b> بشکه\n"
         f"🏭 انبار نفت شما: <b>{fmt(d['stock'])}</b> بشکه\n"
-        f"🛢 دکل‌های نفتی: <b>{d['rigs']}</b> (هر دکل {fmt(d['per_rig'])} بشکه در هر تیک ۳۰ دقیقه‌ای)\n"
-        f"🎲 نفت‌خیزی (شانس اکتشاف): <b>{round(d['richness'])}٪</b>\n\n"
-        "💡 وقتی مخزن زیرزمینی تمام شد، با «اکتشاف نفتی» و بر اساس درصد نفت‌خیزی "
-        "شانس پیدا کردن ذخیره جدید دارید. نفت را به کشورهای دیگر بفروشید."
+        f"🛢 دکل‌های نفتی: <b>{d['rigs']}</b> (هر دکل {fmt(per_rig)} بشکه در هر تیک ۳۰ دقیقه‌ای)\n"
+        f"🛠 سطح تجهیزات استخراج: <b>{level}</b>/{cap}\n"
+        + (f"➡️ هزینهٔ ارتقای بعدی: <b>{fmt_money(nxt_cost)}</b>\n" if nxt_cost else "🏆 حداکثر سطح\n")
+        + f"🤖 تجارت خودکار: <b>{'روشن ✅' if auto else 'خاموش ⏸'}</b>"
+        f" — درآمد هر {minutes} دقیقه: <b>{est['income_millions']} میلیون تومان</b>\n"
+        f"💵 پایهٔ نفتی کشور شما: <b>{est['base_millions']} میلیون</b> در هر فروش کامل\n"
+        + (f"📊 مجموع درآمد نفت تاکنون: <b>{fmt_money(int(biz.get('total_income') or 0))}</b>"
+           f" ({int(biz.get('sales') or 0)} فروش)\n" if int(biz.get("sales") or 0) else "")
+        + f"🎲 نفت‌خیزی (شانس اکتشاف): <b>{round(d['richness'])}٪</b>\n\n"
+        "💡 استخراج با دکل انجام می‌شود؛ با ارتقای تجهیزات، هم بشکهٔ بیشتری استخراج می‌شود "
+        "و هم درآمد فروش بالاتر می‌رود (هر سطح گران‌تر از قبلی)."
     )
     rows = [
+        [("🛠 ارتقای تجهیزات استخراج", "g|oilup")],
+        [(("🤖 خاموش‌کردن تجارت خودکار" if auto else "🤖 روشن‌کردن تجارت خودکار"), "g|oilauto")],
         [("🏗 ساخت دکل نفتی", "g|oilrig")],
         [("🔍 اکتشاف نفتی", "g|oilexp")],
         [("🛒 فروش نفت به کشورها", "g|oilsell")],
         [("📜 عرضه‌های نفت", "g|oillo")],
-        back_row("g|ppl"),
+        back_row("g|mg"),
     ]
     try:
         await call.answer()
@@ -57,7 +76,7 @@ async def oil_menu(call: CallbackQuery):
 @router.callback_query(F.data == "g|oilrig")
 async def oil_rig_menu(call: CallbackQuery):
     """منوی اختصاصی و روان ساخت دکل نفتی با بررسی آنی بودجه و مصالح."""
-    b = await db.fetchone("SELECT * FROM buildings WHERE name='دکل نفتی' OR id=9")
+    b = await db.fetchone("SELECT * FROM buildings WHERE name='دکل نفتی'")
     d = await oil_menu_data(call.from_user.id)
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))
     state = await db.fetchone("SELECT * FROM states WHERE user_id=?", (call.from_user.id,))
@@ -127,7 +146,7 @@ async def oil_rig_custom_input(message: Message, state: FSMContext):
 
 async def _do_build_rig(target_event, qty: int):
     user_id = target_event.from_user.id
-    b = await db.fetchone("SELECT * FROM buildings WHERE name='دکل نفتی' OR id=9")
+    b = await db.fetchone("SELECT * FROM buildings WHERE name='دکل نفتی'")
     cost_per_unit = b.get("cost_money") or 12_000_000 if b else 12_000_000
     bid = b["id"] if b else 9
     mat_per_unit = 10
@@ -308,3 +327,50 @@ async def oil_cancel(call: CallbackQuery):
                      (o["barrels"], call.from_user.id))
     await call.answer("✅ عرضه لغو و نفت به انبار برگشت")
     await oil_offers_menu(call)
+
+
+@router.callback_query(F.data == "g|oilup")
+async def oil_upgrade(call: CallbackQuery):
+    from core.oil import (ensure_business, level_max, per_rig_barrels, upgrade_cost,
+                          level_income_mult)
+    biz = await ensure_business(call.from_user.id)
+    level = int(biz.get("level") or 1)
+    cap = await level_max()
+    if level >= cap:
+        await call.answer(f"🏆 تجهیزات شما در بالاترین سطح ({cap}) است", show_alert=True)
+        return
+    cost = await upgrade_cost(level)
+    user = await db.fetchone("SELECT money FROM users WHERE id=?", (call.from_user.id,))
+    money = int((user or {}).get("money") or 0)
+    nxt = await upgrade_cost(level + 1) if level + 1 < cap else 0
+    text = (
+        f"🛠 <b>ارتقای تجهیزات استخراج نفت</b>\n\n"
+        f"📈 سطح فعلی: <b>{level}</b>/{cap}\n"
+        f"🛢 استخراج هر دکل: <b>{fmt(await per_rig_barrels(call.from_user.id))}</b> بشکه در هر دوره\n"
+        f"💰 ضریب درآمد فروش: <b>×{round(await level_income_mult(level), 2)}</b>\n\n"
+        f"⬆️ هزینهٔ ارتقا به سطح {level + 1}: <b>{fmt_money(cost)}</b>\n"
+        f"💳 خزانه شما: <b>{fmt_money(money)}</b>\n"
+        + (f"🔺 هزینهٔ مرحلهٔ بعد از آن: {fmt_money(nxt)} (هر سطح گران‌تر)\n" if nxt else "")
+        + "\nتأیید می‌کنید؟",
+    )
+    rows = [[("✅ پرداخت و ارتقا", "g|oilupgo")], back_row("g|oil")]
+    await call.answer()
+    await call.message.edit_text(text, reply_markup=kb(rows))
+
+
+@router.callback_query(F.data == "g|oilupgo")
+async def oil_upgrade_go(call: CallbackQuery):
+    from core.oil import upgrade_business
+    ok, msg = await upgrade_business(call.from_user.id)
+    await call.answer("🛠" if ok else "❌")
+    await send_home(call.message, msg)
+    await _oil_menu(call)
+
+
+@router.callback_query(F.data == "g|oilauto")
+async def oil_auto_toggle(call: CallbackQuery):
+    from core.oil import toggle_auto_sell
+    ok, msg = await toggle_auto_sell(call.from_user.id)
+    await call.answer("🤖" if ok else "❌")
+    await send_home(call.message, msg)
+    await _oil_menu(call)

@@ -198,9 +198,13 @@ async def country_display(user_id: int, extended: bool = False) -> str:
     if gov and gov.get("flag"):
         flag = f"{country['flag']}{gov['flag']}"
     main_cur = await get_setting("main_currency", "")
+    from core.politics import country_leader, revolution_status
+    leader = await country_leader(country)
+    rev = await revolution_status(user_id)
     lines = [
         f"{flag} <b>{country['name']}</b>",
-        f"👤 رهبر: {user['full_name'] or user['id']}",
+        f"👤 بازیکن: {user['full_name'] or user['id']}",
+        f"🏛 {leader['title']}: <b>{leader['name']}</b>",
         f"😊 رضایت مردم: <b>{round(state['satisfaction'] or 0)}/100</b>",
         f"💰 خزانه: <b>{fmt_money(user['money'])}</b> (💵 ارز کشور: {state.get('currency_name') or '—'}"
         + (f" | پول اصلی بازی: {main_cur}" if main_cur else "") + ")",
@@ -217,6 +221,9 @@ async def country_display(user_id: int, extended: bool = False) -> str:
             f"⚡️ انرژی: <b>{fmt(state.get('energy') or 0)}</b> kWh | 💧 آب: <b>{fmt(state.get('water') or 0)}</b> | 🔥 گاز: <b>{fmt(state.get('gas') or 0)}</b>",
             f"🕊 دیپلماسی: <b>{round(state.get('diplomacy') or 50)}/100</b>",
         ]
+    if rev["active"]:
+        lines.append(f"\n🔥 <b>انقلاب فعال!</b> شدت {rev['severity']}٪ — فرصت {rev['left']} "
+                     "(🏛 رهبری و انقلاب)")
     return "\n".join(lines)
 
 
@@ -274,6 +281,8 @@ def manage_kb() -> InlineKeyboardMarkup:
         [("🏗 پروژه ملی", "g|prj")],
         [("🪖 ارتش", "g|army")],
         [("⛪ دین و حکومت", "g|gov")],
+        [("🏛 رهبری و انقلاب", "g|pol")],
+        [("🛢 نفت و تجارت خودکار", "g|oil")],
         [("🏢 شرکت‌های من", "g|comp")],
         home_row(),
     ])

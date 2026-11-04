@@ -10,7 +10,8 @@ from core.db import db, get_setting
 from core.economy import (announce, army_power, bump_progress, get_country,
                           get_state, has_project_named, is_disarmed,
                           is_jammed, is_leader_blocked, sub_asset, veto_users)
-from core.utils import fmt, fmt_money, add_hours, iso, hours_left, fmt_hm, jloads, clamp
+from core.utils import (fmt, fmt_money, add_hours, iso, hours_left, hours_ago, fmt_hm,
+                        jloads, clamp)
 from gamebot.common import back_row, blocked_banner, kb, send_home, dm
 
 router = Router()
@@ -755,7 +756,7 @@ async def cyber_cooldown_ok(attacker_id: int, defender_id: int) -> bool:
     last = await db.fetchone(
         "SELECT created_at FROM cyber_ops WHERE attacker_id=? AND defender_id=? ORDER BY id DESC LIMIT 1",
         (attacker_id, defender_id))
-    if last and hours_left(last["created_at"]) < hours:
+    if last and hours_ago(last["created_at"]) < hours:
         return False
     return True
 
@@ -778,16 +779,21 @@ async def cyber_ops_menu(call: CallbackQuery):
     if not await cyber_cooldown_ok(call.from_user.id, defender_id):
         return await call.answer("⏳ هر ۶ ساعت یک عملیات سایبری روی هر کشور", show_alert=True)
     d_country = await get_country(defender_id)
+    from core.politics import active_revolution, country_leader
+    leader = await country_leader(d_country)
+    rev = await active_revolution(defender_id)
     _a, _d, my_cyber = await army_power(call.from_user.id)
     _a2, _d2, their_cyber = await army_power(defender_id)
     chance = cyber_chance(my_cyber, their_cyber)
     await call.answer()
     await call.message.edit_text(
         f"🕶 <b>عملیات سایبری علیه {d_country['flag']} {d_country['name']}</b>\n\n"
-        f"🖥 قدرت سایبری شما: {fmt(my_cyber)}\n🖥 قدرت سایبری دشمن: {fmt(their_cyber)}\n"
+        f"{d_country['flag']} {leader['title']}: <b>{leader['name']}</b>\n"
+        + (f"🔥 این کشور همین حالا در انقلاب است (شدت {rev['severity']}٪)\n" if rev else "")
+        + f"🖥 قدرت سایبری شما: {fmt(my_cyber)}\n🖥 قدرت سایبری دشمن: {fmt(their_cyber)}\n"
         f"🎲 شانس موفقیت پایه: <b>{round(chance)}%</b>\n\nعملیات را انتخاب کنید:",
         reply_markup=kb([
-            [("🎯 ترور رهبر (۱ ساعت فلج)", f"g|cy|assass|{defender_id}")],
+            [("🎯 ترور رئیس‌جمهور (شروع انقلاب)", f"g|cy|assass|{defender_id}")],
             [("💸 دزدی از خزانه", f"g|cy|steal|{defender_id}")],
             [("📡 تداخل در سرور دشمن (۲ ساعت)", f"g|cy|jam|{defender_id}")],
             back_row("g|war"),
@@ -813,39 +819,35 @@ async def cyber_execute(call: CallbackQuery, state: FSMContext):
             f"💸 <b>دزدی از خزانه</b>\n\n💰 خزانه دشمن: <b>{fmt_money(treasury)}</b>\n\n"
             "چه مقدار می‌خواهید بدزدید؟ هرچه عدد بزرگ‌تر باشد شانس موفقیت کمتر است:\n برای انصراف /cancel"
         )
+    d_country = await get_country(defender_id)
+
+    # ─── ترور رئیس‌جمهور: منطق کامل در core.politics (انقلاب + مهار) ───
+    if op == "assass":
+        from core.politics import assassinate
+        _ok, msg = await assassinate(call.from_user.id, defender_id, call.bot)
+        await call.answer()
+        await call.message.edit_text(msg, reply_markup=kb([back_row("g|war")]))
+        return
+
     _a, _d, my_cyber = await army_power(call.from_user.id)
     _a2, _d2, their_cyber = await army_power(defender_id)
     chance = cyber_chance(my_cyber, their_cyber)
     success = random.random() * 100 < chance
-    d_country = await get_country(defender_id)
     await db.execute(
         "INSERT INTO cyber_ops(attacker_id, defender_id, kind, success) VALUES(?,?,?,?)",
         (call.from_user.id, defender_id, op, 1 if success else 0))
-    if op == "assass":
-        if success:
-            await db.execute("UPDATE states SET leader_block_until=? WHERE user_id=?",
-                             (add_hours(1), defender_id))
-            msg = (f"🎯 ترور رهبر {d_country['flag']} {d_country['name']} <b>موفق</b> بود!\n"
-                   "کشور دشمن ۱ ساعت نمی‌تواند حمله و دیپلماسی انجام دهد.")
-            try:
-                await dm(call.bot, defender_id, "🚫 رهبر شما ترور شد! ۱ ساعت حمله و دیپلماسی مسدود است.")
-            except Exception:
-                pass
-        else:
-            msg = "❌ عملیات ترور ناموفق بود — ردپای شما شناسایی شد!"
-    else:  # jam
-        if success:
-            await db.execute("UPDATE states SET server_jam_until=? WHERE user_id=?",
-                             (add_hours(2), defender_id))
-            msg = (f"📡 تداخل در سرور {d_country['flag']} {d_country['name']} <b>موفق</b>!\n"
-                   "کشور دشمن ۲ ساعت فقط می‌تواند بیانیه صادر کند.")
-            try:
-                await dm(call.bot, defender_id,
-                                            "📡 سرورهای شما دچار اختلال شد! ۲ ساعت فقط بیانیه مجاز است.")
-            except Exception:
-                pass
-        else:
-            msg = "❌ عملیات اختلال سرور ناموفق بود!"
+    if success:
+        await db.execute("UPDATE states SET server_jam_until=? WHERE user_id=?",
+                         (add_hours(2), defender_id))
+        msg = (f"📡 تداخل در سرور {d_country['flag']} {d_country['name']} <b>موفق</b>!\n"
+               "کشور دشمن ۲ ساعت فقط می‌تواند بیانیه صادر کند.")
+        try:
+            await dm(call.bot, defender_id,
+                     "📡 سرورهای شما دچار اختلال شد! ۲ ساعت فقط بیانیه مجاز است.")
+        except Exception:
+            pass
+    else:
+        msg = "❌ عملیات اختلال سرور ناموفق بود!"
     await announce(call.bot, f"🕶 گزارش محرمانه: عملیات سایبری علیه {d_country['name']} انجام شد.",
                    section="cyber")
     await call.answer()

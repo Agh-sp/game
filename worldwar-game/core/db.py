@@ -40,7 +40,12 @@ CREATE TABLE IF NOT EXISTS countries (
   has_sea INTEGER DEFAULT 1,
   region TEXT DEFAULT 'آسیا',
   is_active INTEGER DEFAULT 1,
-  owner_id INTEGER
+  owner_id INTEGER,
+  gdp_factor REAL DEFAULT 1,
+  oil_income_base INTEGER DEFAULT 2,
+  leader_name TEXT DEFAULT '',
+  leader_title TEXT DEFAULT 'رئیس‌جمهور',
+  leader_since TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS states (
@@ -502,6 +507,33 @@ CREATE TABLE IF NOT EXISTS rescue_donations (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS revolutions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  country_id INTEGER,
+  severity INTEGER DEFAULT 60,
+  started_at TEXT,
+  ends_at TEXT,
+  status TEXT DEFAULT 'active',
+  trigger TEXT DEFAULT '',
+  outcome TEXT DEFAULT '',
+  money_spent INTEGER DEFAULT 0,
+  troops_lost INTEGER DEFAULT 0,
+  force_block_until TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS oil_business (
+  user_id INTEGER PRIMARY KEY,
+  level INTEGER DEFAULT 1,
+  auto_sell INTEGER DEFAULT 0,
+  last_sale_at TEXT,
+  last_income INTEGER DEFAULT 0,
+  total_income INTEGER DEFAULT 0,
+  sales INTEGER DEFAULT 0,
+  barrels_sold INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS oil_offers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   seller_id INTEGER,
@@ -578,6 +610,12 @@ MIGRATIONS = [
     ("equipment", "subcategory", "TEXT DEFAULT ''"),
     ("rescue_campaigns", "ends_at", "TEXT"),
     ("battles", "strategy", "TEXT DEFAULT ''"),
+    ("countries", "gdp_factor", "REAL DEFAULT 1"),
+    ("countries", "oil_income_base", "INTEGER DEFAULT 2"),
+    ("countries", "leader_name", "TEXT DEFAULT ''"),
+    ("countries", "leader_title", "TEXT DEFAULT 'رئیس‌جمهور'"),
+    ("countries", "leader_since", "TEXT DEFAULT ''"),
+    ("revolutions", "force_block_until", "TEXT"),
 ]
 
 
@@ -829,6 +867,21 @@ DEFAULT_SETTINGS = {
     # ── سازمان نجات ──
     "rescue_vote_hours": "24",
     "rescue_payout_percent": "10",
+    # ── رهبری، ترور و انقلاب ──
+    "revolution_minutes": "30",              # فرصت مهار انقلاب (دقیقه)
+    "revolution_initial_severity": "65",     # شدت اولیه انقلاب
+    "revolution_income_penalty": "0.55",     # ضریب درآمد در زمان انقلاب (۵۵٪)
+    "revolution_success_satisfaction": "20", # افت رضایت در صورت پیروزی انقلاب
+    "revolution_success_money_pct": "0.15",  # غارت خزانه در صورت پیروزی انقلاب
+    "assassination_cooldown_hours": "6",
+    # ── کسب‌وکار نفت (ارتقا + فروش خودکار) ──
+    "oil_auto_sell_minutes": "10",           # هر ۱۰ دقیقه درآمد فروش نفت
+    "oil_level_max": "12",                   # سقف ارتقای تجهیزات استخراج
+    "oil_level_base_cost": "30000000",       # هزینه ارتقا از سطح ۱ به ۲
+    "oil_level_cost_factor": "1.6",          # ضریب گران‌شدن هر سطح بعدی
+    "oil_level_barrel_bonus": "0.15",        # +۱۵٪ استخراج به ازای هر سطح
+    "oil_level_income_bonus": "0.12",        # +۱۲٪ درآمد فروش به ازای هر سطح
+    "oil_sale_need_barrels": "5000",         # بشکه مرجع برای فروش کامل
     # ── تنگه‌ها ──
     "strait_min_naval": "500",              # حداقل قدرت دریایی برای تصاحب تنگه آزاد
     "strait_capture_ratio": "1.3",           # حداقل نسبت توان دریایی برای حمله به تنگه دارای مالک

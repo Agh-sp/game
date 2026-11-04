@@ -335,6 +335,22 @@ async def _slow_loop(bot) -> None:
             await main_currency_recompute(bot)
         except Exception:
             log.exception("currency recompute failed")
+        # فروش خودکار نفت (هر ۱۰ دقیقه) — درآمد میلیونی به خزانه
+        try:
+            from core import oil as oil_mod
+            paid = await oil_mod.auto_sell_tick(bot)
+            if paid:
+                log.info("🛢 درآمد نفت پرداخت شد: %s", paid)
+        except Exception:
+            log.exception("oil auto sell failed")
+        # بستن انقلاب‌هایی که مهلتشان تمام شده
+        try:
+            from core.politics import revolution_tick
+            closed = await revolution_tick(bot)
+            if closed:
+                log.info("🔥 %s انقلاب به پایان رسید", closed)
+        except Exception:
+            log.exception("revolution tick failed")
         await asyncio.sleep(60)
 
 

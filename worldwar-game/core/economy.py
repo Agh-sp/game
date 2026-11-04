@@ -221,13 +221,24 @@ async def income_breakdown(user_id: int) -> dict:
     sat = state.get("satisfaction")
     sat = 50 if sat is None else float(sat)
     tax = float(state.get("tax_rate") or 0)
-    pop_part = pop / 1000 * base
+    # ضریب اقتصاد واقعی کشور (آمریکا/چین/روسیه چند برابر کشورهای کوچک درآمد دارند)
+    gdp = float(country.get("gdp_factor") or 1)
+    pop_part = pop / 1000 * base * gdp
     sat_mult = 0.5 + sat / 100          # رضایت ۰٪ → ۰٫۵ | ۱۰۰٪ → ۱٫۵
     tax_mult = 1 + tax                   # مالیات ۰٪ → ۱ | ۵۰٪ → ۱٫۵
-    daily = int(pop_part * sat_mult * tax_mult)
+    gross = pop_part * sat_mult * tax_mult
+    # در زمان انقلاب، اقتصاد کشور فلج می‌شود (پیش‌فرض ۵۵٪ درآمد)
+    penalty = 1.0
+    try:
+        from core.politics import income_multiplier
+        penalty = await income_multiplier(user_id)
+    except Exception:
+        penalty = 1.0
+    daily = int(gross * penalty)
     return {"daily": daily, "population": pop, "satisfaction": round(sat, 1),
             "tax_rate": tax, "pop_part": int(pop_part), "sat_mult": round(sat_mult, 2),
-            "tax_mult": round(tax_mult, 2),
+            "tax_mult": round(tax_mult, 2), "gdp_factor": gdp,
+            "revolution_penalty": penalty, "gross": int(gross),
             "non_tax": int(daily / tax_mult) if tax_mult else daily}
 
 

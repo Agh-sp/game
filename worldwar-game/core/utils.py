@@ -41,6 +41,14 @@ def hours_left(s: str | None) -> float:
     return max(0.0, (dt - now()).total_seconds() / 3600)
 
 
+def hours_ago(s: str | None) -> float:
+    """چند ساعت از یک زمان گذشته است (برای cooldown‌ها؛ آینده → ۰)."""
+    dt = parse(s)
+    if dt is None:
+        return 1_000_000.0
+    return max(0.0, (now() - dt).total_seconds() / 3600)
+
+
 def fmt_hm(hours: float) -> str:
     """مدت باقی‌مانده به شکل خوانا."""
     if hours <= 0:
