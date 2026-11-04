@@ -23,6 +23,7 @@ const WW_DIR = path.resolve(__dirname, 'worldwar-game');
 // ─── پینگ بیدارباش (Keep-alive) ───
 // هر KEEPALIVE_MINUTES دقیقه یک درخواست فیک به آدرس Web App زده می‌شود تا سرویس خواب نرود.
 const KEEPALIVE_INTERVAL_MINUTES = Math.max(1, parseInt(process.env.KEEPALIVE_MINUTES || '10', 10) || 10);
+const BOTS_AUTOSTART = !['0', 'false', 'no', 'off'].includes(String(process.env.AUTOSTART_BOTS ?? '1').toLowerCase());
 const KEEPALIVE_DISABLED = ['0', 'false', 'no', 'off'].includes(String(process.env.KEEPALIVE ?? '1').toLowerCase());
 const EXTERNAL_WEBAPP_URL = (process.env.WEBAPP_URL || process.env.PUBLIC_URL || process.env.SELF_URL || '')
   .trim()
@@ -38,6 +39,7 @@ interface SelfPingState {
   lastStatus: number | null;
   lastError: string;
   lastTrigger: string;
+  lastFallback: boolean;
 }
 const selfPingState: SelfPingState = {
   enabled: !KEEPALIVE_DISABLED,
@@ -48,6 +50,7 @@ const selfPingState: SelfPingState = {
   lastStatus: null,
   lastError: '',
   lastTrigger: '',
+  lastFallback: false,
 };
 let keepaliveTimer: NodeJS.Timeout | null = null;
 
@@ -68,26 +71,41 @@ function resolveSelfUrl(): string {
   return `http://127.0.0.1:${PORT}`;
 }
 
-async function selfPing(trigger: string = 'interval'): Promise<SelfPingState> {
-  const target = `${resolveSelfUrl()}/health`;
-  selfPingState.target = resolveSelfUrl();
-  selfPingState.lastTrigger = trigger;
-  selfPingState.count += 1;
-  selfPingState.lastPingAt = new Date().toISOString();
+async function pingUrl(url: string): Promise<{ ok: boolean; status: number; error: string }> {
   try {
-    const res = await fetch(target, {
+    const res = await fetch(url, {
       method: 'GET',
       headers: { 'x-keepalive': '1', 'user-agent': 'wwgame-keepalive/1.0' },
       signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined,
     });
-    selfPingState.lastStatus = res.status;
-    selfPingState.lastError = res.ok ? '' : `HTTP ${res.status}`;
-    if (trigger !== 'interval') console.log(`[KeepAlive] ping ${target} → ${res.status}`);
+    return { ok: res.ok, status: res.status, error: res.ok ? '' : `HTTP ${res.status}` };
   } catch (err: any) {
-    selfPingState.lastStatus = 0;
-    selfPingState.lastError = err?.message || 'network error';
-    console.warn(`[KeepAlive] ping failed (${target}): ${selfPingState.lastError}`);
+    return { ok: false, status: 0, error: err?.message || 'network error' };
   }
+}
+
+async function selfPing(trigger: string = 'interval'): Promise<SelfPingState> {
+  const base = resolveSelfUrl();
+  const localBase = `http://127.0.0.1:${PORT}`;
+  selfPingState.target = base;
+  selfPingState.lastTrigger = trigger;
+  selfPingState.count += 1;
+  selfPingState.lastPingAt = new Date().toISOString();
+
+  let result = await pingUrl(`${base}/health`);
+  selfPingState.lastFallback = false;
+  // اگر آدرس عمومی از داخل کانتینر در دسترس نبود، حداقل سلامت خود را محلی بسنج
+  if (!result.ok && base !== localBase) {
+    const local = await pingUrl(`${localBase}/health`);
+    if (local.ok) {
+      result = { ok: true, status: local.status, error: `public ping failed (${result.error}) — local fallback ok` };
+      selfPingState.lastFallback = true;
+    }
+  }
+  selfPingState.lastStatus = result.status;
+  selfPingState.lastError = result.error;
+  if (trigger !== 'interval') console.log(`[KeepAlive] ping ${base} → ${result.status || result.error}`);
+  else if (!result.ok) console.warn(`[KeepAlive] ping failed (${base}): ${result.error}`);
   return selfPingState;
 }
 
@@ -220,6 +238,10 @@ let watchdogTimer: NodeJS.Timeout | null = null;
 
 function startWatchdog() {
   if (watchdogTimer) clearInterval(watchdogTimer);
+  if (!BOTS_AUTOSTART) {
+    console.log('[Watchdog] auto-start of bots is disabled (AUTOSTART_BOTS=0)');
+    return;
+  }
   watchdogTimer = setInterval(async () => {
     if (isIntentionalStop) return;
     try {
@@ -356,9 +378,12 @@ async function startServer() {
   // آدرس عمومی سرویس را از درخواست‌های ورودی یاد می‌گیریم تا پینگ بیدارباش به همان Web App برود
   app.use((req, _res, next) => {
     if (!learnedBaseUrl) {
-      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
-      const proto = (req.headers['x-forwarded-proto'] as string) || (req as any).protocol || 'http';
-      if (host) learnedBaseUrl = `${String(proto).split(',')[0]}://${String(host).split(',')[0]}`;
+      const host = String((req.headers['x-forwarded-host'] as string) || req.headers.host || '').split(',')[0].trim();
+      const fwdProto = String((req.headers['x-forwarded-proto'] as string) || '').split(',')[0].trim();
+      const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host);
+      // پشت پراکسی هاست‌های عمومی همیشه https هستند (پیش‌فرض امن)
+      const proto = fwdProto || (isLocal ? ((req as any).protocol || 'http') : 'https');
+      if (host) learnedBaseUrl = `${proto}://${host}`;
     }
     next();
   });
@@ -1035,8 +1060,10 @@ async function startServer() {
   const httpServer = app.listen(PORT, '0.0.0.0', async () => {
     console.log(`World War Game Command Center running at http://0.0.0.0:${PORT}`);
     const pid = await getBotPid();
-    if (!pid) {
-      console.log('Starting World War Telegram Bots (run_all.py)...');
+    if (!pid && !BOTS_AUTOSTART) {
+      console.log('[Bots] auto-start disabled (AUTOSTART_BOTS=0) — start them from the panel or set AUTOSTART_BOTS=1');
+    } else if (!pid) {
+      console.log(`Starting World War Telegram Bots (${BOT_WEBHOOK_MODE ? 'run_webhook.py' : 'run_all.py'})...`);
       startBotProcess();
     } else {
       console.log(`World War Telegram Bots running with PID ${pid}`);
