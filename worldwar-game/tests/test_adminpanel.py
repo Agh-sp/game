@@ -47,11 +47,16 @@ async def main():
             f"هر دو آیدی در کانفیگ هستند {SUPER_ADMIN_IDS}")
     H.check(set(DEFAULT_SUPER_ADMIN_IDS) == {SUPER1, SUPER2}, "آیدی‌های پیش‌فرض درست است")
     await ensure_super_admins()
-    rows = await db.fetchall("SELECT id, is_super FROM admins")
+    rows = await db.fetchall("SELECT id, is_super, perms FROM admins")
     ids = {int(r["id"]) for r in rows}
     H.check(SUPER1 in ids and SUPER2 in ids, "هر دو سوپرادمین در جدول admins ثبت شدند")
     H.check(all(int(r["is_super"]) == 1 for r in rows if int(r["id"]) in (SUPER1, SUPER2)),
             "هر دو is_super=1 دارند")
+    from core.admins import ALL_PERMS
+    import json as _json
+    sup_rows = [r for r in rows if int(r["id"]) in (SUPER1, SUPER2)]
+    H.check(all(set(_json.loads(r["perms"] or "[]")) >= set(ALL_PERMS) for r in sup_rows),
+            f"دسترسی ۱۰۰٪ ({len(ALL_PERMS)} مجوز) برای هر دو ثبت شده")
     H.check(await is_admin(SUPER1) and await is_super_admin(SUPER2), "دسترسی ادمین برای هر دو فعال است")
     H.check(not await is_admin(PLAYER), "بازیکن عادی ادمین نیست")
 
@@ -144,12 +149,16 @@ async def main():
     from core.db import get_setting
     H.check(await get_setting("war_vote_minutes", "") == "30", "تنظیمات سریع ذخیره شد")
 
-    print("\n== TEST 7: هیچ لاگی در لاگ ادمین‌ها ثبت نشود ==")
+    print("\n== TEST 7: فقط لاگ فیش ثبت شود، بقیهٔ عملیات‌ها بی‌لاگ ==")
     logs_after = await log_count()
-    H.check(logs_after == logs_before,
-            f"هیچ رکوردی به admin_logs اضافه نشد ({logs_before}→{logs_after})")
-    events = await db.fetchone("SELECT COUNT(*) c FROM game_events")
-    print(f"     (game_events = {events['c']} — مستقل از لاگ ادمین‌ها)")
+    H.check(logs_after == logs_before + 1,
+            f"فقط یک رکورد (فیش) اضافه شد ({logs_before}→{logs_after})")
+    last = await db.fetchone("SELECT * FROM admin_logs ORDER BY id DESC LIMIT 1")
+    H.check(last and last["action"] == "فیش", f"نوع رکورد «فیش» است ({last['action'] if last else '—'})")
+    H.check(last and str(PLAYER) in (last["detail"] or ""), "شناسهٔ کاربر فیش در لاگ هست")
+    money_logs = await db.fetchone(
+        "SELECT COUNT(*) c FROM admin_logs WHERE action NOT IN ('فیش', 'کاربر')")
+    H.check(int(money_logs["c"]) == 0, "هیچ لاگی برای پول/سکه/تنظیمات ثبت نشده")
 
     print("\n== TEST 8: کارت کاربر و پیام همگانی ==")
     await dp.feed_update(bot, H.cb_update(SUPER1, "p|op|card"))
@@ -159,6 +168,35 @@ async def main():
     await send_text(dp, bot, SUPER1, "📣 پیام آزمایشی")
     texts = [t for (_n, _c, t, _p) in H.SENT if t]
     H.check(any("پیام همگانی" in (t or "") for t in texts), "پیام همگانی ارسال شد")
+
+    print("\n== TEST 9: نمایش لاگ‌ها (فقط فیش و کاربر) و مدیریت ادمین‌ها ==")
+    # یک لاگ دستی «کاربر» و یک لاگ غیرمجاز بسازیم
+    await db.execute("INSERT INTO admin_logs(admin_id, action, detail) VALUES(?, 'کاربر', 'تست کاربر')",
+                     (SUPER1,))
+    await db.execute("INSERT INTO admin_logs(admin_id, action, detail) VALUES(?, 'تنظیمات', 'نباید دیده شود')",
+                     (SUPER1,))
+    H.SENT.clear()
+    await dp.feed_update(bot, H.cb_update(SUPER1, "p|logs"))
+    texts = [t for (_n, _c, t, _p) in H.SENT if t]
+    shown = texts[-1] if texts else ""
+    H.check("تست کاربر" in shown, "لاگ کاربر نمایش داده شد")
+    H.check("نباید دیده شود" not in shown, "لاگ غیرمرتبط نمایش داده نمی‌شود")
+
+    logs_before_admins = await log_count()
+    new_admin = 777000111
+    await db.execute("INSERT OR IGNORE INTO users(id, full_name) VALUES(?, 'ادمین جدید')", (new_admin,))
+    await dp.feed_update(bot, H.cb_update(SUPER1, "p|admadd"))
+    await send_text(dp, bot, SUPER1, str(new_admin))
+    row = await db.fetchone("SELECT * FROM admins WHERE id=?", (new_admin,))
+    H.check(bool(row) and int(row["is_super"]) == 1, "ادمین جدید با دسترسی کامل اضافه شد")
+    await dp.feed_update(bot, H.cb_update(SUPER1, f"p|admdel|{new_admin}"))
+    row = await db.fetchone("SELECT * FROM admins WHERE id=?", (new_admin,))
+    H.check(not row, "ادمین جدید حذف شد")
+    H.check(await is_admin(SUPER1), "سوپرادمین ثابت باقی ماند")
+
+    logs_final = await log_count()
+    H.check(logs_final == logs_before_admins,
+            f"مدیریت ادمین‌ها هم لاگی نساخت ({logs_before_admins}→{logs_final})")
 
     print("\n=== TOTAL ERRORS:", len(H.ERRORS))
     for e in H.ERRORS:

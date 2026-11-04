@@ -5,8 +5,9 @@
 واریز/برداشت پول و سکه شاهی، رضایت، تجهیزات، دکل نفتی، مسدودی، آزادکردن قفل‌ها،
 تأیید فیش‌ها، پیام همگانی و تنظیمات سریع.
 
-⚠️ طبق درخواست: **هیچ عملیاتی در این پنل در «لاگ ادمین‌ها» (`admin_logs`) ثبت
-نمی‌شود** — نه هنگام دادن/گرفتن پول یا سکه و نه برای سایر دکمه‌ها.
+⚠️ سیاست لاگ: **دادن/گرفتن پول و سکه، رضایت، تجهیزات، بن، آزادسازی قفل، تنظیمات
+و مدیریت ادمین‌ها هیچ لاگی نمی‌سازند**؛ فقط دو نوع رکورد در «لاگ ادمین‌ها» می‌ماند:
+تأیید/رد **فیش** و عملیات مربوط به **کاربران عادی** (که از ربات ادمین ثبت می‌شود).
 """
 from __future__ import annotations
 
@@ -136,6 +137,7 @@ def panel_kb() -> object:
         [("🚫 مسدودکردن", "p|op|ban"), ("✅ رفع مسدودی", "p|op|unban")],
         [("🔓 آزادکردن قفل‌ها", "p|op|unlock"), ("🔍 کارت کاربر", "p|op|card")],
         [("🧾 فیش‌های منتظر", "p|rec"), ("📢 پیام همگانی", "p|bc")],
+        [("📜 لاگ فیش و کاربران", "p|logs"), ("👑 مدیریت ادمین‌ها", "p|admins")],
         [("⚙️ تنظیمات سریع", "p|setmenu")],
         home_row(),
     ])
@@ -191,6 +193,15 @@ async def panel_target(message: Message, state: FSMContext):
     if not target:
         return await send_home(message, "❌ کاربری با این آیدی/یوزرنیم پیدا نشد. دوباره بفرستید یا /cancel")
     uid = int(target["id"])
+
+    if op == "admadd":
+        await state.clear()
+        if not await is_super_admin(message.from_user.id):
+            return await send_home(message, "⛔️ فقط سوپرادمین می‌تواند ادمین اضافه کند.")
+        from core.admins import grant_admin
+        await grant_admin(uid, target.get("full_name") or "")
+        return await send_home(message, f"👑 <code>{uid}</code> با دسترسی ۱۰۰٪ ادمین شد.",
+                               reply_markup=panel_kb())
 
     if op == "card":
         await state.clear()
@@ -399,6 +410,7 @@ async def panel_receipt_action(call: CallbackQuery):
         await db.execute(
             "UPDATE receipts SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
             (call.from_user.id, iso(), rid))
+        await _log_receipt(call.from_user.id, f"رد فیش #{rid} کاربر {r['user_id']}")
         await call.answer("❌ فیش رد شد")
         return await panel_receipts(call, answer=False)
     # تأیید بدون ثبت در لاگ ادمین‌ها
@@ -432,6 +444,7 @@ async def panel_receipt_action(call: CallbackQuery):
         await db.execute("UPDATE users SET royal_coins=COALESCE(royal_coins,0)+? WHERE id=?",
                          (coins, r["user_id"]))
         result = f"✅ فیش #{rid} تأیید و {fmt(coins)} سکه شاهی واریز شد."
+    await _log_receipt(call.from_user.id, f"تأیید فیش #{rid} کاربر {r['user_id']}")
     await call.answer(result[:180], show_alert=True)
     await panel_receipts(call, answer=False)
 
@@ -516,3 +529,92 @@ async def panel_setting_save(message: Message, state: FSMContext):
     await state.clear()
     await send_home(message, f"✅ «{QUICK_SETTINGS[key]}» به <b>{raw}</b> تغییر کرد.",
                     reply_markup=panel_kb())
+
+
+# ─── لاگ‌ها (فقط فیش و کاربران عادی) و مدیریت ادمین‌ها ───
+
+
+async def _log_receipt(admin_id: int, detail: str) -> None:
+    """تنها نوشتن مجاز در admin_logs از این پنل: رکورد فیش‌ها."""
+    await db.execute(
+        "INSERT INTO admin_logs(admin_id, action, detail) VALUES(?, 'فیش', ?)",
+        (admin_id, detail[:500]))
+
+
+LOG_ACTIONS = ("فیش", "کاربر")
+
+
+@router.callback_query(F.data == "p|logs")
+async def panel_logs(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    rows = await db.fetchall(
+        "SELECT l.*, a.name FROM admin_logs l LEFT JOIN admins a ON a.id=l.admin_id "
+        "WHERE l.action IN (?, ?) ORDER BY l.id DESC LIMIT 15", LOG_ACTIONS)
+    lines = ["📜 <b>لاگ‌ها — فقط فیش و کاربران</b>\n",
+             "طبق تنظیمات، لاگ عملیات مالی/اداری این پنل ثبت نمی‌شود.\n"]
+    if not rows:
+        lines.append("— رکوردی وجود ندارد —")
+    for r in rows:
+        icon = "🧾" if r["action"] == "فیش" else "👥"
+        lines.append(f"{icon} #{r['id']} | {r['name'] or r['admin_id']} | "
+                     f"{r['action']}: {r['detail']}")
+    buttons = [[("🧾 فیش‌های منتظر", "p|rec")], [("🏰 بازگشت به پنل", "p|home")]]
+    await call.answer()
+    await safe_edit_panel(call, "\n".join(lines), buttons)
+
+
+async def safe_edit_panel(call: CallbackQuery, text: str, buttons: list):
+    try:
+        await call.message.edit_text(text, reply_markup=kb(buttons))
+    except Exception:
+        await send_home(call.message, text, reply_markup=kb(buttons))
+
+
+@router.callback_query(F.data == "p|admins")
+async def panel_admins(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    from core.admins import list_admins
+    if not await is_super_admin(call.from_user.id):
+        return await call.answer("⛔️ فقط سوپرادمین‌ها ادمین‌ها را می‌بینند.", show_alert=True)
+    rows = await list_admins()
+    lines = ["👑 <b>مدیریت ادمین‌ها (دسترسی ۱۰۰٪)</b>\n"]
+    buttons = []
+    for a in rows:
+        is_super = int(a.get("is_super") or 0)
+        lines.append(f"{'👑' if is_super else '🛡'} <code>{a['id']}</code> — {a.get('name') or '—'}")
+        if not is_super:
+            buttons.append([(f"🗑 حذف ادمین {a['id']}", f"p|admdel|{a['id']}")])
+    buttons.append([("➕ افزودن ادمین جدید", "p|admadd")])
+    buttons.append([("🏰 بازگشت به پنل", "p|home")])
+    await call.answer()
+    await safe_edit_panel(call, "\n".join(lines), buttons)
+
+
+@router.callback_query(F.data == "p|admadd")
+async def panel_admin_add(call: CallbackQuery, state: FSMContext):
+    if not await _guard(call):
+        return
+    if not await is_super_admin(call.from_user.id):
+        return await call.answer("⛔️ فقط سوپرادمین.", show_alert=True)
+    await state.set_state(PanelFSM.target)
+    await state.update_data(op="admadd")
+    await call.answer()
+    await call.message.edit_text(
+        "👑 آیدی عددی ادمین جدید را بفرستید (یا @username):\n"
+        "این آیدی دسترسی ۱۰۰٪ به هر دو ربات می‌گیرد.\nبرای انصراف /cancel")
+
+
+@router.callback_query(F.data.startswith("p|admdel|"))
+async def panel_admin_del(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    if not await is_super_admin(call.from_user.id):
+        return await call.answer("⛔️ فقط سوپرادمین.", show_alert=True)
+    from core.admins import revoke_admin
+    uid = int(call.data.split("|")[2])
+    if not await revoke_admin(uid):
+        return await call.answer("سوپرادمین ثابت کانفیگ حذف‌شدنی نیست.", show_alert=True)
+    await call.answer("🗑 دسترسی ادمین گرفته شد")
+    await panel_admins(call)

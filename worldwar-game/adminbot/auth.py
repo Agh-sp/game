@@ -5,11 +5,9 @@ from aiogram.types import CallbackQuery, Message
 from core.db import db
 from core.utils import jloads
 
-ALL_PERMS = [
-    "users", "economy", "countries", "military", "world", "projects",
-    "un", "missions", "tickets", "settings", "broadcast", "logs", "admins",
-    "trade", "media", "seasons",
-]
+from core.admins import ALL_PERMS as _CORE_PERMS  # مرجع واحد دسترسی‌ها (۱۰۰٪)
+
+ALL_PERMS = list(_CORE_PERMS)
 
 PERM_TITLES = {
     "users": "👥 کاربران", "economy": "🪙 اقتصاد و پرداخت", "countries": "🏳 کشورها",
