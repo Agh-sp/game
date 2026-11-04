@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from core.db import db
 from core.economy import (add_asset, assets_of, bump_progress, get_country,
                           project_done, settle_trainings)
-from core.utils import fmt, hours_left, fmt_hm, iso, add_hours, clamp
+from core.utils import fmt, fmt_money, hours_left, fmt_hm, iso, add_hours, clamp
 from gamebot.common import back_row, kb, send_home, dm
 
 router = Router()
@@ -118,10 +118,10 @@ async def base_reject(call: CallbackQuery):
 @router.callback_query(F.data == "g|basereq")
 async def base_request_list(call: CallbackQuery):
     countries = await db.fetchall(
-        "SELECT c.*, u.full_name FROM countries c JOIN users u ON u.id=c.owner_id "
-        "WHERE c.owner_id IS NOT NULL AND c.owner_id!=? ORDER BY c.name",
+        "SELECT c.*, u.id AS owner_uid, u.full_name FROM users u JOIN countries c ON c.id=u.country_id "
+        "WHERE u.id!=? AND u.banned=0 AND c.is_active=1 ORDER BY c.name",
         (call.from_user.id,))
-    rows = [[(f"{c['flag']} {c['name']}", f"g|basereqr|{c['owner_id']}")] for c in countries]
+    rows = [[(f"{c['flag']} {c['name']}", f"g|basereqr|{c['owner_uid']}")] for c in countries]
     rows.append(back_row("g|base"))
     await call.answer()
     await call.message.edit_text(
@@ -277,7 +277,7 @@ async def eq_category(call: CallbackQuery):
         lines = [f"{cat['emoji']} <b>تجهیزات تسلیحات {cat['title']}</b>\n"]
         rows = []
         for e in items:
-            price = f"🪙 {fmt(e['price_coins'])} سکه شاهی" if e["price_coins"] else f"💰 {fmt(e['price_money'])}"
+            price = f"🪙 {fmt(e['price_coins'])} سکه شاهی" if e["price_coins"] else f"💰 {fmt_money(e['price_money'])}"
             lines.append(f"{e['emoji']} <b>{e['name']}</b>: {price} — ⚔️{fmt(e['attack_power'])} ⚡سرعت {e['speed']}")
             rows.append([(f"{e['emoji']} {e['name']}", f"g|eqbuy|{e['id']}")])
         rows.append(back_row("g|eqshop"))
@@ -310,7 +310,7 @@ async def eq_category(call: CallbackQuery):
         lines = [f"{cat['emoji']} <b>تجهیزات {cat['title']}</b>\n"]
         rows = []
         for e in items:
-            price = f"🪙 {fmt(e['price_coins'])} سکه" if e["price_coins"] else f"💰 {fmt(e['price_money'])}"
+            price = f"🪙 {fmt(e['price_coins'])} سکه" if e["price_coins"] else f"💰 {fmt_money(e['price_money'])}"
             lines.append(f"{e['emoji']} <b>{e['name']}</b>: {price} — ⚔️{fmt(e['attack_power'])} "
                          f"🛡{fmt(e['defense_power'])} ⚡{e['speed']}"
                          + (f"\n   🔒 {e['requires_text']}" if e["requires_text"] else ""))
@@ -355,7 +355,7 @@ async def eq_subcategory_items(call: CallbackQuery):
         if e["price_coins"]:
             price = f"🪙 {fmt(e['price_coins'])} سکه"
         else:
-            price = f"💰 {fmt(e['price_money'])}"
+            price = f"💰 {fmt_money(e['price_money'])}"
         stats = []
         if e["attack_power"]:
             stats.append(f"⚔️ {fmt(e['attack_power'])}")
@@ -389,10 +389,10 @@ async def eq_buy(call: CallbackQuery, state: FSMContext):
     await state.set_state(ArmyFSM.eq_qty)
     await state.update_data(eq_id=eid)
     await call.answer()
-    price = f"🪙 {fmt(e['price_coins'])} سکه" if e["price_coins"] else f"💰 {fmt(e['price_money'])}"
+    price = f"🪙 {fmt(e['price_coins'])} سکه" if e["price_coins"] else f"💰 {fmt_money(e['price_money'])}"
     await call.message.edit_text(
         f"{e['emoji']} <b>{e['name']}</b> — {price} برای هر عدد\n\n"
-        f"💰 موجودی پول شما: <b>{fmt(user['money'])}</b>\n"
+        f"💰 موجودی پول شما: <b>{fmt_money(user['money'])}</b>\n"
         f"🪙 موجودی سکه شاهی: <b>{fmt(user['royal_coins'])}</b>\n"
         + (f"🔒 پیش‌نیاز: {e['requires_text']}\n" if e["requires_text"] else "")
         + "\nتعداد مورد نیاز برای خرید را بنویسید:\n برای انصراف /cancel"
@@ -417,7 +417,7 @@ async def eq_qty_input(message: Message, state: FSMContext):
         return await send_home(message, f"❌ سکه شاهی کافی نیست — نیاز: {fmt(total_coins)}")
     if total_money and user["money"] < total_money:
         await state.clear()
-        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt(total_money)}")
+        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt_money(total_money)}")
     await state.clear()
     if total_coins:
         await db.execute("UPDATE users SET royal_coins=royal_coins-? WHERE id=?", (total_coins, user["id"]))
@@ -428,7 +428,7 @@ async def eq_qty_input(message: Message, state: FSMContext):
     price = f" + 🪙 {fmt(total_coins)} سکه" if total_coins else ""
     await send_home(
         message,
-        f"✅ <b>{fmt(qty)} × {e['name']}</b> به زرادخانه اضافه شد! (💰 {fmt(total_money)}{price})\n\n"
+        f"✅ <b>{fmt(qty)} × {e['name']}</b> به زرادخانه اضافه شد! (💰 {fmt_money(total_money)}{price})\n\n"
         "🎖 <b>پادگان</b> — گزینه بعدی را انتخاب کنید:",
         reply_markup=kb(barracks_rows()),
     )
@@ -491,7 +491,7 @@ async def train_qty_input(message: Message, state: FSMContext):
     cost = count * (t["cost_per_unit"] or 0)
     if user["money"] < cost:
         await state.clear()
-        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt(cost)}")
+        return await send_home(message, f"❌ بودجه کافی نیست — نیاز: {fmt_money(cost)}")
     await state.clear()
     await db.execute("UPDATE users SET money=money-? WHERE id=?", (cost, user["id"]))
     await db.execute(
@@ -501,7 +501,7 @@ async def train_qty_input(message: Message, state: FSMContext):
     await bump_progress(user["id"], "trained", count)
     await send_home(message,
         f"🎓 آموزش <b>{fmt(count)} × {t['name']}</b> آغاز شد!\n"
-        f"⏱ پایان: {fmt_hm(t['train_hours'])} دیگر\n💰 هزینه: {fmt(cost)}\n\n"
+        f"⏱ پایان: {fmt_hm(t['train_hours'])} دیگر\n💰 هزینه: {fmt_money(cost)}\n\n"
         "🎖 <b>پادگان</b> — گزینه بعدی را انتخاب کنید:",
         reply_markup=kb(barracks_rows()),
     )

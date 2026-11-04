@@ -10,7 +10,7 @@ from core.db import db, get_setting
 from core.economy import (announce, army_power, bump_progress, get_country,
                           get_state, has_project_named, is_disarmed,
                           is_jammed, is_leader_blocked, sub_asset, veto_users)
-from core.utils import fmt, add_hours, iso, hours_left, fmt_hm, jloads, clamp
+from core.utils import fmt, fmt_money, add_hours, iso, hours_left, fmt_hm, jloads, clamp
 from gamebot.common import back_row, blocked_banner, kb, send_home, dm
 
 router = Router()
@@ -80,6 +80,23 @@ async def war_menu(call: CallbackQuery):
     await war_room(call)
 
 
+async def enemy_countries(user_id: int) -> list[dict]:
+    """کشورهای قابل هدف‌گیری (اعلان جنگ / سایبری).
+
+    ملاک، کشورِ ثبت‌شده روی کاربر (`users.country_id`) است نه فقط `countries.owner_id`؛
+    قبلاً کشورهایی مثل روسیه/ژاپن که owner_id آن‌ها خالی مانده بود در هیچ لیستی نمی‌آمدند
+    و جنگ/عملیات سایبری روی آن‌ها ممکن نبود.
+    """
+    rows = await db.fetchall(
+        "SELECT c.*, u.id AS player_id, u.full_name FROM users u "
+        "JOIN countries c ON c.id = u.country_id "
+        "WHERE u.id != ? AND u.banned = 0 AND c.is_active = 1 "
+        "ORDER BY c.name", (user_id,))
+    for r in rows:
+        r["owner_uid"] = r["player_id"]      # شناسه بازیکنِ هدف (نه owner_id جدول کشورها)
+    return rows
+
+
 # ─── اعلان جنگ ───
 
 
@@ -87,12 +104,10 @@ async def war_menu(call: CallbackQuery):
 async def declare_list(call: CallbackQuery):
     if await is_leader_blocked(call.from_user.id):
         return await call.answer("🚫 رهبر شما ترور شده — دیپلماسی مسدود است!", show_alert=True)
-    countries = await db.fetchall(
-        "SELECT c.*, u.full_name FROM countries c JOIN users u ON u.id=c.owner_id "
-        "WHERE c.owner_id IS NOT NULL AND c.owner_id!=? ORDER BY c.name", (call.from_user.id,))
+    countries = await enemy_countries(call.from_user.id)
     if not countries:
         return await call.answer("کشور دیگری برای جنگ وجود ندارد", show_alert=True)
-    rows = [[(f"{c['flag']} {c['name']}", f"g|wdec|{c['owner_id']}")] for c in countries]
+    rows = [[(f"{c['flag']} {c['name']}", f"g|wdec|{c['owner_uid']}")] for c in countries]
     rows.append(back_row("g|war"))
     await call.answer()
     await call.message.edit_text(
@@ -177,7 +192,7 @@ async def create_war(attacker_id: int, defender_id: int, reason: str,
         await announce(bot,
                        f"🗳 سازمان ملل: درخواست <b>مجوز جنگ</b> {a_country['flag']} {a_country['name']} "
                        f"علیه {d_country['flag']} {d_country['name']}\nدلیل: {reason}\n"
-                       "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.")
+                       "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.", section="un")
     else:
         # جنگ فوری + بررسی جنایت جنگی
         hours = float(await get_setting("vote_duration_hours", "24"))
@@ -187,7 +202,7 @@ async def create_war(attacker_id: int, defender_id: int, reason: str,
              "crime", war_id, '["جنایت جنگی است","جنایت نیست","بی‌طرف"]', add_hours(hours), attacker_id))
         await announce(bot,
                        f"⚔️ {a_country['flag']} {a_country['name']} بدون مجوز سازمان ملل به "
-                       f"{d_country['flag']} {d_country['name']} اعلان جنگ داد!")
+                       f"{d_country['flag']} {d_country['name']} اعلان جنگ داد!", section="war_declare")
     try:
         await dm(bot, 
             defender_id,
@@ -683,7 +698,7 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
 
     if won:
         report_lines.append(f"🏆 <b>پیروزی قاطع نیروهای {a_country['name']}!</b>")
-        report_lines.append(f"💰 غارت خزانه: <b>{fmt(loot)}</b> پول ملی")
+        report_lines.append(f"💰 غارت خزانه: <b>{fmt_money(loot)}</b> پول ملی")
     else:
         report_lines.append(f"🛡 <b>مدافعان {d_country['name']} حمله را دفع کردند!</b>")
 
@@ -700,7 +715,7 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         report_lines.append(f"• ادوات منهدم‌شده مهاجم ({round(atk_loss * 100)}%):\n   " + " ، ".join(atk_destroyed_names[:5]))
 
     result_text = "\n".join(report_lines)
-    await announce(call.bot, result_text)
+    await announce(call.bot, result_text, section="war_attack")
     await call.answer()
     try:
         await call.message.edit_text(result_text, reply_markup=kb([back_row("g|war")]))
@@ -719,15 +734,14 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
 async def cyber_enemy_list(call: CallbackQuery):
     if await is_leader_blocked(call.from_user.id):
         return await call.answer("🚫 رهبر شما ترور شده!", show_alert=True)
-    countries = await db.fetchall(
-        "SELECT c.* FROM countries c JOIN users u ON u.id=c.owner_id "
-        "WHERE c.owner_id IS NOT NULL AND c.owner_id!=? ORDER BY c.name", (call.from_user.id,))
-    rows = [[(f"{c['flag']} {c['name']}", f"g|wcyb|{c['owner_id']}")] for c in countries]
+    countries = await enemy_countries(call.from_user.id)
+    rows = [[(f"{c['flag']} {c['name']}", f"g|wcyb|{c['owner_uid']}")] for c in countries]
     rows.append(back_row("g|war"))
     await call.answer()
     await call.message.edit_text(
         "🕶 <b>عملیات سایبری (مخفیانه)</b>\n\nکشور هدف را انتخاب کنید.\n"
-        "💡 اگر قدرت سایبری شما ۲ برابر دشمن باشد شانس ~۵۰٪ است و برای شانس ۱۰۰٪ باید ۳ برابر قدرت داشته باشید.",
+        "💡 شانس موفقیت: قدرت برابر = ۵۰٪ • دو برابر = ۹۵٪ • نصفِ دشمن = ۲۵٪.\n"
+        "🖥 قدرت سایبری از تجهیزات سایبری (پادگان → 💻 سایبری) و سربازها می‌آید.",
         reply_markup=kb(rows),
     )
 
@@ -743,7 +757,15 @@ async def cyber_cooldown_ok(attacker_id: int, defender_id: int) -> bool:
 
 
 def cyber_chance(my_cyber: int, their_cyber: int) -> float:
-    return clamp(50 * (my_cyber / max(1, their_cyber) - 1), 5, 95)
+    """شانس موفقیت سایبری بر اساس نسبت قدرت دو کشور.
+
+    قدرت برابر → ۵۰٪ | دو برابر → ۹۵٪ | نصف → ۲۵٪ | یک‌چهارم → ۱۲٪
+    (قبلاً با قدرت برابر شانس فقط ۵٪ بود و عملاً هیچ عملیات سایبری موفق نمی‌شد.)
+    """
+    my = max(1, int(my_cyber or 0))
+    their = max(1, int(their_cyber or 0))
+    ratio = my / their
+    return clamp(50 * ratio, 5, 95)
 
 
 @router.callback_query(F.data.startswith("g|wcyb|"))
@@ -771,8 +793,10 @@ async def cyber_ops_menu(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("g|cy|"))
 async def cyber_execute(call: CallbackQuery, state: FSMContext):
-    _, op, defender_id = call.data.split("|")
-    defender_id = int(defender_id)
+    parts = call.data.split("|")
+    if len(parts) < 4:
+        return await call.answer("درخواست نامعتبر است", show_alert=True)
+    op, defender_id = parts[2], int(parts[3])
     if not await cyber_cooldown_ok(call.from_user.id, defender_id):
         return await call.answer("⏳ هنوز زمان cooldown تمام نشده", show_alert=True)
     if op == "steal":
@@ -782,7 +806,7 @@ async def cyber_execute(call: CallbackQuery, state: FSMContext):
         treasury = victim["money"]
         await call.answer()
         return await call.message.edit_text(
-            f"💸 <b>دزدی از خزانه</b>\n\n💰 خزانه دشمن: <b>{fmt(treasury)}</b>\n\n"
+            f"💸 <b>دزدی از خزانه</b>\n\n💰 خزانه دشمن: <b>{fmt_money(treasury)}</b>\n\n"
             "چه مقدار می‌خواهید بدزدید؟ هرچه عدد بزرگ‌تر باشد شانس موفقیت کمتر است:\n برای انصراف /cancel"
         )
     _a, _d, my_cyber = await army_power(call.from_user.id)
@@ -818,7 +842,8 @@ async def cyber_execute(call: CallbackQuery, state: FSMContext):
                 pass
         else:
             msg = "❌ عملیات اختلال سرور ناموفق بود!"
-    await announce(call.bot, f"🕶 گزارش محرمانه: عملیات سایبری علیت {d_country['name']} انجام شد.")
+    await announce(call.bot, f"🕶 گزارش محرمانه: عملیات سایبری علیه {d_country['name']} انجام شد.",
+                   section="cyber")
     await call.answer()
     await call.message.edit_text(msg, reply_markup=kb([back_row("g|war")]))
 
@@ -835,7 +860,7 @@ async def steal_input(message: Message, state: FSMContext):
     defender_id = data["defender_id"]
     victim = await db.fetchone("SELECT * FROM users WHERE id=?", (defender_id,))
     if amount > victim["money"]:
-        return await send_home(message, f"❌ خزانه دشمن فقط {fmt(victim['money'])} دارد.")
+        return await send_home(message, f"❌ خزانه دشمن فقط {fmt_money(victim['money'])} دارد.")
     await state.clear()
     _a, _d, my_cyber = await army_power(message.from_user.id)
     _a2, _d2, their_cyber = await army_power(defender_id)
@@ -899,7 +924,7 @@ async def settle_votes(bot=None) -> None:
                         if auto:
                             try:
                                 await announce(bot, "🗳 سازمان ملل: هیچ رأیی در رای‌گیری مجوز جنگ ثبت نشد "
-                                                    "و مجوز به‌صورت خودکار صادر شد.")
+                                                    "و مجوز به‌صورت خودکار صادر شد.", section="un")
                             except Exception:
                                 pass
                 else:

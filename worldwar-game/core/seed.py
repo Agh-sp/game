@@ -301,9 +301,12 @@ async def run(db) -> None:
             "UPDATE countries SET currency=name WHERE currency IS NULL OR currency=''")
         for name, flag, iso, special, coins, pop, sea, region, cur, oil, rich in COUNTRIES:
             flag_url = f"https://flagcdn.com/w640/{iso}.png"
+            # ⚠️ پرچم انتخاب‌شده توسط بازیکن/ادمین (flag_url غیرخالی) هرگز بازنویسی نمی‌شود
             await db.execute(
-                "UPDATE countries SET iso_code=?, flag_url=?, flag=? WHERE name=?",
-                (iso, flag_url, flag, name))
+                "UPDATE countries SET iso_code=?, flag=?, "
+                "flag_url=CASE WHEN flag_url IS NULL OR flag_url='' THEN ? ELSE flag_url END "
+                "WHERE name=?",
+                (iso, flag, flag_url, name))
             await db.execute(
                 "UPDATE countries SET currency=?, oil_reserve=?, oil_richness=? "
                 "WHERE name=? AND ((currency IS NULL OR currency='') OR (oil_reserve IS NULL OR oil_reserve=0))",

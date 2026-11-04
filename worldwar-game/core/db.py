@@ -660,12 +660,16 @@ async def get_setting(key: str, default: str = "") -> str:
     return (row["value"] if row else default) or default
 
 
+INITIAL_MONEY = 200_000_000   # ۲۰۰ میلیون — بودجه اولیه پیش‌فرض
+
+
 async def get_initial_money() -> int:
     """بودجه اولیه هر بازیکن تازه‌وارد (قابل تنظیم از پنل ادمین)."""
     try:
-        return int(float(await get_setting("initial_money", "200")))
+        value = int(float(await get_setting("initial_money", str(INITIAL_MONEY))))
     except (TypeError, ValueError):
-        return 200
+        return INITIAL_MONEY
+    return value if value > 0 else INITIAL_MONEY
 
 
 async def set_setting(key: str, value: str) -> None:
@@ -704,16 +708,72 @@ async def init_db() -> None:
             value = texts.GUIDE
         await db.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (key, value))
 
-    # یکپارچه‌سازی و رفع باگ تلاقی مالکیت کشورها با کاربران فعال
-    await db.execute("""
-        UPDATE countries SET owner_id = (
-            SELECT u.id FROM users u 
-            WHERE u.country_id = countries.id AND u.banned = 0 
-            ORDER BY u.country_taken_at DESC LIMIT 1
-        )
-        WHERE id IN (SELECT DISTINCT country_id FROM users WHERE country_id IS NOT NULL AND banned = 0)
-          AND (owner_id IS NULL OR owner_id = 0)
-    """)
+    # مهاجرت مقدار قدیمی بودجه اولیه (۲۰۰) به مقیاس میلیونی (۲۰۰٫۰۰۰٫۰۰۰)
+    try:
+        row = await db.fetchone("SELECT value FROM settings WHERE key='initial_money'")
+        if row and row["value"]:
+            try:
+                old_value = float(row["value"])
+            except (TypeError, ValueError):
+                old_value = None
+            if old_value is not None and old_value < 1_000:
+                await set_setting("initial_money", str(INITIAL_MONEY))
+    except Exception:
+        pass
+
+    # یکپارچه‌سازی مالکیت کشورها با کاربران (مالکیت دوگانه، مالک بی‌کاربر و ...)
+    await sync_country_owners()
+
+
+async def sync_country_owners() -> None:
+    """هم‌ترازکردن countries.owner_id با users.country_id.
+
+    باگ‌های رایجی که این تابع رفع می‌کند:
+      • کاربری کشور دارد ولی owner_id کشور خالی است → کشور در لیست اعلان جنگ/سایبری دیده نمی‌شد.
+      • دو کاربر هم‌زمان یک کشور را claim کرده‌اند → کشور دو مالک داشت و جنگ روی id اشتباه ثبت می‌شد.
+      • کشور owner_id دارد ولی کاربرش country_id ندارد (انتساب از پنل ادمین) → کاربر کشور را از دست می‌داد.
+    """
+    try:
+        # ۱) کشورهایی که owner_id دارند ولی مالکشان country_id ندارد → به مالک برگردانده می‌شود
+        await db.execute("""
+            UPDATE users SET country_id = (
+                SELECT c.id FROM countries c
+                WHERE c.owner_id = users.id AND (users.country_id IS NULL OR users.country_id = 0)
+                ORDER BY c.id LIMIT 1
+            )
+            WHERE (country_id IS NULL OR country_id = 0)
+              AND EXISTS (SELECT 1 FROM countries c WHERE c.owner_id = users.id)
+              AND banned = 0
+        """)
+        # ۲) مالکیت دوگانه: اگر owner_id کشور یکی از claimant ها باشد همان می‌ماند،
+        #    در غیر این صورت جدیدترین claimant مالک می‌شود و بقیه آزاد می‌شوند
+        await db.execute("""
+            UPDATE users SET country_id = NULL
+            WHERE country_id IS NOT NULL AND banned = 0 AND id NOT IN (
+                SELECT COALESCE(
+                    (SELECT u2.id FROM users u2
+                     WHERE u2.country_id = c.id AND u2.banned = 0 AND u2.id = c.owner_id LIMIT 1),
+                    (SELECT u3.id FROM users u3
+                     WHERE u3.country_id = c.id AND u3.banned = 0
+                     ORDER BY u3.country_taken_at DESC, u3.id DESC LIMIT 1)
+                )
+                FROM countries c
+                WHERE c.id IN (SELECT country_id FROM users WHERE country_id IS NOT NULL AND banned = 0)
+            )
+        """)
+        # ۳) پر کردن owner_id خالی از claimant های واقعی
+        await db.execute("""
+            UPDATE countries SET owner_id = (
+                SELECT u.id FROM users u
+                WHERE u.country_id = countries.id AND u.banned = 0
+                ORDER BY u.country_taken_at DESC, u.id DESC LIMIT 1
+            )
+            WHERE EXISTS (SELECT 1 FROM users u WHERE u.country_id = countries.id AND u.banned = 0)
+              AND (owner_id IS NULL OR owner_id = 0)
+        """)
+    except Exception:
+        import logging
+        logging.getLogger("db").exception("sync_country_owners failed")
 
 
 DEFAULT_SETTINGS = {
@@ -729,7 +789,7 @@ DEFAULT_SETTINGS = {
     "trade_tax_percent": "5",
     "income_base": "100",
     # بودجه اولیه‌ای که هر بازیکن تازه‌وارد دریافت می‌کند (قابل تغییر از پنل ادمین)
-    "initial_money": "200",
+    "initial_money": "200000000",
     # رای‌گیری مجوز جنگ سازمان ملل — ۳۰ دقیقه
     "war_vote_minutes": "30",
     "vote_duration_hours": "24",

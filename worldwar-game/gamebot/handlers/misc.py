@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 
 from core.db import db, get_setting
 from core.economy import bump_progress, get_progress
-from core.utils import fmt, day_str, iso, tehran
+from core.utils import fmt, fmt_money, day_str, iso, tehran
 from gamebot.common import back_row, kb, main_menu_kb, send_home
 
 router = Router()
@@ -39,7 +39,7 @@ async def missions_menu(call: CallbackQuery):
         done = current >= (m["target_value"] or 1)
         rewards = []
         if m["reward_money"]:
-            rewards.append(f"💰 {fmt(m['reward_money'])}")
+            rewards.append(f"💰 {fmt_money(m['reward_money'])}")
         if m["reward_coins"]:
             rewards.append(f"🪙 {fmt(m['reward_coins'])}")
         status = "✅ گرفته شده" if claimed else ("🟢 آماده" if done else f"⚙️ {fmt(current)}/{fmt(m['target_value'])}")

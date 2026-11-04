@@ -9,7 +9,7 @@ from core.db import db, get_setting
 from core.economy import (add_asset, bump_progress, consumption, get_country,
                           get_state, project_done, satisfaction_recompute,
                           sector_capacity, asset_qty)
-from core.utils import fmt, jloads, jdumps, clamp, progress_bar
+from core.utils import fmt, fmt_money, jloads, jdumps, clamp, progress_bar
 from gamebot.common import back_row, kb, send_home
 
 
@@ -126,7 +126,7 @@ async def sector_page(call: CallbackQuery):
     lines += ["", "🏗 <b>سازه یا تأسیسات برای ساخت:</b>"]
     rows = []
     for b in buildings:
-        cost = f"🪙 {fmt(b['cost_coins'])}" if b["cost_coins"] else f"💰 {fmt(b['cost_money'])}"
+        cost = f"🪙 {fmt(b['cost_coins'])}" if b["cost_coins"] else f"💰 {fmt_money(b['cost_money'])}"
         cap_txt = f" | +{fmt(b['capacity'])} واحد" if b["capacity"] else ""
         lines.append(f"{b['emoji']} {b['name']}: {cost}{cap_txt}")
         rows.append([(f"{b['emoji']} {b['name']}", f"g|buy|{b['id']}")])
@@ -171,7 +171,7 @@ async def buy_building(call: CallbackQuery):
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))
     state = await get_state(call.from_user.id)
     err = await check_building_requirements(call.from_user.id, b)
-    cost = f"🪙 {fmt(b['cost_coins'])} سکه شاهی" if b["cost_coins"] else f"💰 {fmt(b['cost_money'])}"
+    cost = f"🪙 {fmt(b['cost_coins'])} سکه شاهی" if b["cost_coins"] else f"💰 {fmt_money(b['cost_money'])}"
     qty = await asset_qty(call.from_user.id, "building", bid)
     mat_per_unit = 10 if not b["cost_coins"] else 20
     text = (
@@ -269,7 +269,7 @@ async def execute_building_purchase(target_event, bid: int, qty: int):
         return await send_home(target_event, msg)
 
     if total_money and user["money"] < total_money:
-        msg = f"❌ بودجه کافی نیست. نیاز: {fmt(total_money)}"
+        msg = f"❌ بودجه کافی نیست. نیاز: {fmt_money(total_money)}"
         if isinstance(target_event, CallbackQuery):
             return await target_event.answer(msg, show_alert=True)
         return await send_home(target_event, msg)
@@ -350,7 +350,7 @@ async def food_buy(call: CallbackQuery, state: FSMContext):
     await state.set_state(PeopleFSM.food_tons)
     await call.answer()
     await call.message.edit_text(
-        f"🛒 <b>خرید غذا</b>\n\nقیمت هر تن: <b>{fmt(price)}</b>\n\n"
+        f"🛒 <b>خرید غذا</b>\n\nقیمت هر تن: <b>{fmt_money(price)}</b>\n\n"
         "تعداد تن مورد نیاز را بنویسید (هر تن = ۱۰۰ واحد غذا):\n برای انصراف /cancel"
     )
 
@@ -367,7 +367,7 @@ async def food_tons_input(message: Message, state: FSMContext):
     total = tons * price
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (message.from_user.id,))
     if user["money"] < total:
-        return await send_home(message, f"❌ بودجه کافی نیست. نیاز: {fmt(total)}")
+        return await send_home(message, f"❌ بودجه کافی نیست. نیاز: {fmt_money(total)}")
     await state.clear()
     await db.execute("UPDATE users SET money=money-? WHERE id=?", (total, user["id"]))
     await db.execute(
@@ -420,7 +420,7 @@ async def welfare_menu(call: CallbackQuery):
         "🎁 <b>رفاه مردم و قوانین</b>\n\n"
         f"💵 ارز کشور: <b>{cur_name}</b> — امتیاز: <b>{info.get('score', 0)}</b> — رتبه جهانی: <b>{info.get('rank', 0)}/{info.get('total', 1)}</b>\n"
         + main_line
-        + f"🎁 یارانه روزانه: <b>{fmt(subsidy_val)}</b> (سقف اثرگذار: {fmt(threshold)})\n"
+        + f"🎁 یارانه روزانه: <b>{fmt_money(subsidy_val)}</b> (سقف اثرگذار: {fmt_money(threshold)})\n"
         f"💰 نرخ مالیات: <b>{tax_val}%</b>\n"
         f"⚖️ قوانین انتخابی: <b>{len(chosen_laws_dict)}</b>\n\n"
         "⚠️ یارانه از درآمد روزانه کسر می‌شود — هرچه از سقف بیشتر باشد رضایت بیشتر است.\n"
@@ -543,8 +543,8 @@ async def subsidy_menu(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.edit_text(
         f"🎁 <b>یارانه روزانه</b>\n\n"
-        f"یارانه فعلی: <b>{fmt(st['subsidy_daily'] or 0)}</b>\n"
-        f"🎯 سقف اثرگذار برای جمعیت شما: <b>{fmt(threshold)}</b>\n\n"
+        f"یارانه فعلی: <b>{fmt_money(st['subsidy_daily'] or 0)}</b>\n"
+        f"🎯 سقف اثرگذار برای جمعیت شما: <b>{fmt_money(threshold)}</b>\n\n"
         "مقدار یارانه روزانه را بنویسید (۰ = حذف یارانه).\n"
         "یارانه از درآمد روزانه کسر می‌شود.\n برای انصراف /cancel",
     )
@@ -562,7 +562,7 @@ async def subsidy_input(message: Message, state: FSMContext):
     await state.clear()
     await db.execute("UPDATE states SET subsidy_daily=? WHERE user_id=?", (amount, message.from_user.id))
     await satisfaction_recompute(message.from_user.id)
-    await send_home(message, f"✅ یارانه روزانه روی <b>{fmt(amount)}</b> تنظیم شد.")
+    await send_home(message, f"✅ یارانه روزانه روی <b>{fmt_money(amount)}</b> تنظیم شد.")
     from gamebot.common import kb
     await send_home(message, "🎁 رفاه:", reply_markup=kb([
         [("💵 پول", "g|cur"), ("🎁 یارانه", "g|sub")],
@@ -573,13 +573,25 @@ async def subsidy_input(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "g|tax")
 async def tax_menu(call: CallbackQuery, state: FSMContext):
+    from core.economy import income_breakdown
     st = await get_state(call.from_user.id)
+    info = await income_breakdown(call.from_user.id)
+    minutes = int(float(await get_setting("income_interval_minutes", "30")))
+    per_tick = int(info["daily"] * minutes / (24 * 60))
+    # اثر هر ۱۰٪ مالیات روی درآمد روزانه (با همین جمعیت و رضایت)
+    step10 = int(info["pop_part"] * info["sat_mult"] * 0.10)
     await call.answer()
     await call.message.edit_text(
         f"💰 <b>نرخ مالیات</b>\n\n"
-        f"نرخ فعلی: <b>{round((st['tax_rate'] or 0) * 100, 1)}%</b>\n\n"
+        f"نرخ فعلی: <b>{round((st['tax_rate'] or 0) * 100, 1)}%</b>\n"
+        f"👥 جمعیت کشور: <b>{fmt(info['population'])}</b> نفر\n"
+        f"🙂 رضایت مردم: <b>{info['satisfaction']}%</b>\n"
+        f"💵 درآمد مالیاتی روزانه: <b>{fmt_money(info['daily'])}</b>\n"
+        f"⏱ درآمد هر {minutes} دقیقه: <b>{fmt_money(per_tick)}</b>\n"
+        f"📈 هر ۱۰٪ مالیات ≈ <b>{fmt_money(step10)}</b> درآمد روزانه بیشتر\n\n"
         "نرخ مالیات را به درصد بنویسید (۰ تا ۵۰):\n"
-        "💡 مالیات درآمد روزانه را بیشتر می‌کند اما رضایت مردم را کم.\n برای انصراف /cancel",
+        "💡 هرچه جمعیت و رضایت مردم بیشتر باشد درآمد مالیاتی بالاتر می‌رود؛ "
+        "مالیات بالا رضایت را کم می‌کند.\n برای انصراف /cancel",
     )
     await state.set_state(PeopleFSM.tax)
 
@@ -595,7 +607,12 @@ async def tax_input(message: Message, state: FSMContext):
     await state.clear()
     await db.execute("UPDATE states SET tax_rate=? WHERE user_id=?", (rate / 100, message.from_user.id))
     await satisfaction_recompute(message.from_user.id)
-    await send_home(message, f"✅ نرخ مالیات روی <b>{round(rate, 1)}%</b> تنظیم شد.")
+    from core.economy import income_breakdown
+    info = await income_breakdown(message.from_user.id)
+    await send_home(message,
+        f"✅ نرخ مالیات روی <b>{round(rate, 1)}%</b> تنظیم شد.\n"
+        f"💵 درآمد مالیاتی روزانه شما: <b>{fmt_money(info['daily'])}</b>\n"
+        f"🙂 رضایت جدید: <b>{info['satisfaction']}%</b>")
     from gamebot.common import kb
     await send_home(message, "🎁 رفاه:", reply_markup=kb([
         [("💵 پول", "g|cur"), ("🎁 یارانه", "g|sub")],

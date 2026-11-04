@@ -114,9 +114,9 @@ async def report_list(call: CallbackQuery):
     if await is_jammed(call.from_user.id):
         return await call.answer("📡 سرورهای شما اختلال دارند!", show_alert=True)
     countries = await db.fetchall(
-        "SELECT c.* FROM countries c JOIN users u ON u.id=c.owner_id "
-        "WHERE c.owner_id IS NOT NULL AND c.owner_id!=? ORDER BY c.name", (call.from_user.id,))
-    rows = [[(f"{c['flag']} {c['name']}", f"g|unrep|{c['owner_id']}")] for c in countries]
+        "SELECT c.*, u.id AS owner_uid FROM users u JOIN countries c ON c.id=u.country_id "
+        "WHERE u.id!=? AND u.banned=0 AND c.is_active=1 ORDER BY c.name", (call.from_user.id,))
+    rows = [[(f"{c['flag']} {c['name']}", f"g|unrep|{c['owner_uid']}")] for c in countries]
     rows.append(back_row("g|un"))
     await call.answer()
     await call.message.edit_text(
@@ -181,7 +181,7 @@ async def sanction_create(message: Message, state: FSMContext):
     await announce(message.bot,
                    f"⚖️ سازمان ملل: درخواست تحریم «{titles[kind]}» توسط "
                    f"{m_country['flag'] if m_country else ''} ثبت شد.\nدلیل: {reason}\n"
-                   "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.")
+                   "کشورها از بخش 🕊 سازمان ملل رأی می‌دهند.", section="un")
     await send_home(message, 
         f"✅ درخواست تحریم ثبت شد و در سازمان ملل و کانال اعلام شد.\n"
         f"⏳ پایان رای‌گیری: {fmt_hm(hours)} دیگر — نتیجه به‌طور خودکار اعمال می‌شود.")

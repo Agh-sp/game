@@ -100,5 +100,6 @@ async def government_confirm(call: CallbackQuery):
     if country:
         from core.economy import announce
         await announce(call.bot,
-                       f"{country['flag']}{g['flag']} کشور {country['name']} حکومت خود را به «{g['name']}» تغییر داد!")
+                       f"{country['flag']}{g['flag']} کشور {country['name']} حکومت خود را به «{g['name']}» تغییر داد!",
+                       section="government")
     await gov_menu(call)

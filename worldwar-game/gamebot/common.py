@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from core.db import db, get_setting
 from core.economy import army_power, get_country, get_state, my_gov_religion
 from core.firebase import fb
-from core.utils import fmt, hours_left, fmt_hm, is_past
+from core.utils import fmt, fmt_money, hours_left, fmt_hm, is_past
 
 log = logging.getLogger(__name__)
 
@@ -202,7 +202,7 @@ async def country_display(user_id: int, extended: bool = False) -> str:
         f"{flag} <b>{country['name']}</b>",
         f"👤 رهبر: {user['full_name'] or user['id']}",
         f"😊 رضایت مردم: <b>{round(state['satisfaction'] or 0)}/100</b>",
-        f"💰 خزانه: <b>{fmt(user['money'])}</b> (💵 ارز کشور: {state.get('currency_name') or '—'}"
+        f"💰 خزانه: <b>{fmt_money(user['money'])}</b> (💵 ارز کشور: {state.get('currency_name') or '—'}"
         + (f" | پول اصلی بازی: {main_cur}" if main_cur else "") + ")",
         f"🪙 سکه شاهی: <b>{fmt(user['royal_coins'])}</b>",
         f"👥 جمعیت: <b>{fmt(country['population'])}</b>",

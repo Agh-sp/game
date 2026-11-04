@@ -627,7 +627,7 @@ async function startServer() {
     const attackerLossRatio = isVictory ? Math.max(0.05, (1 - ratio) * 0.4) : 0.35 + (1 - ratio) * 0.3;
     const defenderLossRatio = isVictory ? 0.4 + ratio * 0.3 : Math.max(0.08, ratio * 0.3);
 
-    const spoilsOfWar = isVictory ? Math.floor((defender.treasury || 50000000) * 0.15) : 0;
+    const spoilsOfWar = isVictory ? Math.floor((defender.treasury || 200000000) * 0.15) : 0;
 
     res.json({
       isVictory,

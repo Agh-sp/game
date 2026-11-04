@@ -8,7 +8,7 @@ from core.db import db, get_setting
 from core.economy import get_country
 from core.oil import create_offer, explore, oil_menu_data, offers_text
 from core.treaties import find_treaty
-from core.utils import fmt
+from core.utils import fmt, fmt_money
 from gamebot.common import back_row, kb, send_home, dm
 
 router = Router()
@@ -74,9 +74,9 @@ async def oil_rig_menu(call: CallbackQuery):
         "🏗 <b>ساخت دکل نفتی</b> 🛢\n\n"
         f"📦 تعداد دکل‌های فعلی شما: <b>{current_rigs}</b> عدد\n"
         f"⚡️ استخراج هر دکل: <b>+{fmt(per_rig)}</b> بشکه در هر دوره ۳۰ دقیقه‌ای\n\n"
-        f"💰 هزینه هر دکل: <b>{fmt(cost_per_unit)}</b>\n"
+        f"💰 هزینه هر دکل: <b>{fmt_money(cost_per_unit)}</b>\n"
         f"🧱 مصالح لازم هر دکل: <b>{mat_per_unit}</b> واحد\n\n"
-        f"💳 بودجه فعلی شما: <b>{fmt(user_money)}</b>\n"
+        f"💳 بودجه فعلی شما: <b>{fmt_money(user_money)}</b>\n"
         f"🧱 مصالح آزاد شما: <b>{fmt(user_mat)}</b> واحد\n\n"
         "تعداد دکل مورد نظر برای ساخت را انتخاب کنید:"
     )
@@ -150,9 +150,9 @@ async def _do_build_rig(target_event, qty: int):
         return await send_home(target_event, msg)
         
     if user_money < total_cost:
-        msg = f"❌ <b>بودجه کافی ندارید!</b>\nبرای ساخت {qty} دکل به {fmt(total_cost)} پول نیاز دارید (موجودی: {fmt(user_money)})."
+        msg = f"❌ <b>بودجه کافی ندارید!</b>\nبرای ساخت {qty} دکل به {fmt_money(total_cost)} پول نیاز دارید (موجودی: {fmt_money(user_money)})."
         if is_call:
-            await target_event.answer(f"❌ بودجه کافی نیست! نیاز: {fmt(total_cost)}", show_alert=True)
+            await target_event.answer(f"❌ بودجه کافی نیست! نیاز: {fmt_money(total_cost)}", show_alert=True)
             return
         return await send_home(target_event, msg)
         
@@ -166,7 +166,7 @@ async def _do_build_rig(target_event, qty: int):
         await target_event.answer(f"✅ {qty} دکل نفتی ساخته شد!")
         await _oil_menu(target_event)
     else:
-        await send_home(target_event, f"✅ تعداد <b>{qty} دکل نفتی</b> با موفقیت احداث شد!\n🧱 مصالح مصرفی: {total_mat} واحد\n💰 هزینه: {fmt(total_cost)}")
+        await send_home(target_event, f"✅ تعداد <b>{qty} دکل نفتی</b> با موفقیت احداث شد!\n🧱 مصالح مصرفی: {total_mat} واحد\n💰 هزینه: {fmt_money(total_cost)}")
 
 
 
@@ -177,7 +177,7 @@ async def oil_explore(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text(
         f"🔍 <b>اکتشاف نفتی</b>\n\n"
-        f"💰 هزینه: <b>{fmt(cost)}</b>\n"
+        f"💰 هزینه: <b>{fmt_money(cost)}</b>\n"
         f"🎲 شانس موفقیت (نفت‌خیزی کشور): <b>{round(d['richness'])}٪</b>\n"
         f"🛢 در صورت موفقیت: <b>{fmt(int(await get_setting('oil_exploration_add', '2000000000')))}</b> "
         "بشکه به مخزن اضافه می‌شود.\n\nتأیید می‌کنید؟",
@@ -246,7 +246,7 @@ async def oil_sell_price(message: Message, state: FSMContext):
                      (data["barrels"], message.from_user.id))
     oid = await create_offer(message.from_user.id, data["barrels"],
                              0 if coins else price, price if coins else 0)
-    price_txt = f"🪙 {fmt(price)} سکه شاهی" if coins else f"💰 {fmt(price)}"
+    price_txt = f"🪙 {fmt(price)} سکه شاهی" if coins else f"💰 {fmt_money(price)}"
     await send_home(message, f"✅ عرضه #{oid} ثبت شد: {fmt(data['barrels'])} بشکه ← {price_txt}")
     text_out, rows = await offers_text(message.from_user.id)
     rows.append(back_row("g|oil"))

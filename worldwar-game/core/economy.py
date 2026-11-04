@@ -169,7 +169,8 @@ async def satisfaction_recompute(user_id: int) -> float:
     threshold = max(1, int(pop * 0.0004))
     if subsidy > 0:
         sat += min(10.0, subsidy / threshold * 6)
-    sat -= (state.get("tax_rate") or 0) * 25
+    # مالیات بالا رضایت را کم می‌کند (۲۰٪ → ۳ واحد) — ملایم‌تر از قبل تا مالیات منطقی بماند
+    sat -= (state.get("tax_rate") or 0) * 15
 
     # قوانین + اثر دین/حکومت
     chosen = jloads(state.get("chosen_laws"), {})
@@ -202,16 +203,37 @@ async def satisfaction_recompute(user_id: int) -> float:
 # ─── درآمد و ارز ───
 
 
-async def income_amount(user_id: int) -> int:
+async def income_breakdown(user_id: int) -> dict:
+    """جزئیات درآمد روزانه: جمعیت، رضایت، نرخ مالیات، سهم هر بخش و مبلغ نهایی.
+
+    فرمول: (جمعیت ÷ ۱۰۰۰) × ضریب درآمد × (۰٫۵ + رضایت÷۱۰۰) × (۱ + نرخ مالیات)
+    یعنی هرچه جمعیت و رضایت بیشتر باشد درآمدِ مالیاتی هم بیشتر می‌شود و
+    نرخ مالیاتی که بازیکن انتخاب می‌کند درآمد را به‌صورت مستقیم بالا می‌برد.
+    """
     user = await get_user(user_id)
     country = await get_country(user_id)
     state = await get_state(user_id)
     if not user or not country:
-        return 0
+        return {"daily": 0, "population": 0, "satisfaction": 0, "tax_rate": 0.0,
+                "pop_part": 0, "sat_mult": 1.0, "tax_mult": 1.0, "non_tax": 0}
     base = float(await get_setting("income_base", "100"))
-    sat = state["satisfaction"] or 50
-    tax = state.get("tax_rate") or 0
-    return int(country["population"] / 1000 * base * (0.5 + sat / 100) * (1 + tax * 0.5))
+    pop = country["population"] or 0
+    sat = state.get("satisfaction")
+    sat = 50 if sat is None else float(sat)
+    tax = float(state.get("tax_rate") or 0)
+    pop_part = pop / 1000 * base
+    sat_mult = 0.5 + sat / 100          # رضایت ۰٪ → ۰٫۵ | ۱۰۰٪ → ۱٫۵
+    tax_mult = 1 + tax                   # مالیات ۰٪ → ۱ | ۵۰٪ → ۱٫۵
+    daily = int(pop_part * sat_mult * tax_mult)
+    return {"daily": daily, "population": pop, "satisfaction": round(sat, 1),
+            "tax_rate": tax, "pop_part": int(pop_part), "sat_mult": round(sat_mult, 2),
+            "tax_mult": round(tax_mult, 2),
+            "non_tax": int(daily / tax_mult) if tax_mult else daily}
+
+
+async def income_amount(user_id: int) -> int:
+    """درآمد روزانه کامل کشور (شامل اثر مالیات)."""
+    return (await income_breakdown(user_id))["daily"]
 
 
 # ─── قدرت نظامی ───
@@ -304,18 +326,19 @@ async def get_progress(user_id: int) -> dict:
 # ─── اعلان کانال ───
 
 
-async def announce(bot, text: str, reply_markup=None) -> None:
-    """ارسال اعلان به کانال تنظیم‌شده همراه با دکمه و لینک ورود به ربات."""
+async def announce(bot, text: str, reply_markup=None,
+                   section: str = "general", name: str = "") -> None:
+    """ارسال اعلان به کانال تنظیم‌شده، همراه با عکس همان بخش از کتابخانه تصاویر ادمین.
+
+    `section` یکی از کلیدهای core.images.IMAGE_SECTIONS است (war_declare، un، cyber، ...).
+    اگر عکسی برای آن بخش ثبت نشده باشد، عکس «عمومی» و در نهایت فقط متن ارسال می‌شود.
+    """
     channel = await get_setting("announcement_channel", "")
     if not channel:
         return
     try:
-        from core.images import get_channel_bot_username, channel_entry_markup
-        username = await get_channel_bot_username(bot)
-        footer = f"\n\n🎮 <b>ورود به ربات:</b> @{username}"
-        full_text = text if f"@{username}" in text else (text + footer)
-        rm = reply_markup or channel_entry_markup(username)
-        await bot.send_message(channel, full_text, reply_markup=rm)
+        from core.images import send_with_image
+        await send_with_image(bot, channel, text, section, name, reply_markup=reply_markup)
     except Exception:
         try:
             await bot.send_message(channel, text)
@@ -339,7 +362,7 @@ async def settle_projects(user_id: int, bot=None) -> list[str]:
         await db.execute("UPDATE player_projects SET status='done' WHERE id=?", (r["id"],))
         opened.append(f"{r['bemoji']} {r['bname']}")
         if bot:
-            await announce(bot, f"🎉 افتتاح «{r['bname']}» در کشور اعلام شد.")
+            await announce(bot, f"🎉 افتتاح «{r['bname']}» در کشور اعلام شد.", section="project")
     if opened:
         await satisfaction_recompute(user_id)
     return opened

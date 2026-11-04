@@ -8,14 +8,14 @@ import logging
 
 from core.currency import main_currency_recompute
 from core.db import db, get_setting, set_setting
-from core.economy import (consumption, get_country, income_amount,
+from core.economy import (consumption, get_country, income_amount, income_breakdown,
                           satisfaction_recompute, sector_capacity, get_state)
 from core.events import log_event
 from core.firebase import fb
 from core.images import announce_img
 from core.rescue import close_campaign, campaign_list
 from core.straits import toll_payers_slice
-from core.utils import fmt, iso, now, TEHRAN_OFFSET
+from core.utils import fmt, fmt_money, iso, now, TEHRAN_OFFSET
 from core import seed as seed_mod
 
 log = logging.getLogger("scheduler")
@@ -41,9 +41,10 @@ async def income_tick(bot) -> None:
             await satisfaction_recompute(uid)
         except Exception:
             pass
-        daily = await income_amount(uid)
-        tax = u["tax_rate"] or 0
-        non_tax_daily = daily / (1 + tax * 0.5) if daily else 0
+        info = await income_breakdown(uid)
+        daily = info["daily"]
+        tax = info["tax_rate"]
+        non_tax_daily = info["non_tax"]
         income_slice = int(daily * share)
         non_tax_slice = int(non_tax_daily * share)
         subsidy_slice = int((u["subsidy_daily"] or 0) * share)
@@ -93,23 +94,26 @@ async def income_tick(bot) -> None:
         total_paid += max(0, net)
         # اعلان به بازیکن
         c = country or {}
-        blockade_txt = (f"🚫 جریمه انسداد تنگه‌ها ({blockade_count} تنگه مسدود): <b>-{fmt(blockade_loss)}</b> (۱۰٪ به ازای هر تنگه)\n" if blockade_loss else "")
+        blockade_txt = (f"🚫 جریمه انسداد تنگه‌ها ({blockade_count} تنگه مسدود): <b>-{fmt_money(blockade_loss)}</b> (۱۰٪ به ازای هر تنگه)\n" if blockade_loss else "")
         msg = (
             f"💰 <b>درآمد دوره‌ای ({minutes} دقیقه)</b>\n\n"
             f"{blockade_txt}"
             f"{c.get('flag', '')} {c.get('name', '')}\n"
-            f"💵 درآمد مالیات: <b>{fmt(income_slice)}</b>\n"
+            f"👥 جمعیت: <b>{fmt(info['population'])}</b> نفر | 🙂 رضایت: <b>{info['satisfaction']}%</b>"
+            f" | 💰 نرخ مالیات: <b>{round(info['tax_rate'] * 100, 1)}%</b>\n"
+            f"💵 درآمد مالیات این دوره: <b>{fmt_money(income_slice)}</b>"
+            f" (روزانه <b>{fmt_money(daily)}</b>)\n"
         )
         if subsidy_slice:
-            msg += f"🎁 کسر یارانه: <b>{fmt(subsidy_slice)}</b>\n"
+            msg += f"🎁 کسر یارانه: <b>{fmt_money(subsidy_slice)}</b>\n"
         if toll_total:
-            msg += f"⚓ عوارض تنگه‌ها: <b>-{fmt(toll_total)}</b>\n"
+            msg += f"⚓ عوارض تنگه‌ها: <b>-{fmt_money(toll_total)}</b>\n"
         if extracted:
             msg += f"🛢 نفت استخراج‌شده: <b>{fmt(extracted)} بشکه</b>\n"
         if res_txt:
             names = {"power": "برق", "water": "آب", "gas": "گاز"}
             msg += "🏭 مازاد به انبار رفت: " + "، ".join(names.get(r, r) for r in res_txt) + "\n"
-        msg += f"\n✅ خالص به خزانه: <b>{fmt(net)}</b>"
+        msg += f"\n✅ خالص به خزانه: <b>{fmt_money(net)}</b>"
         try:
             from gamebot.common import kb
             await bot.send_message(uid, msg, reply_markup=kb([]))
@@ -136,14 +140,14 @@ async def season_votes_task(bot) -> None:
             channel = await get_setting("announcement_channel", "")
             if channel:
                 try:
-                    m = await bot.send_message(
-                        channel,
+                    from core.images import send_with_image
+                    m = await send_with_image(
+                        bot, channel,
                         "🗳 <b>رای‌گیری سیزن جدید!</b>\n\nکدام مود سیزن بعدی باشد؟ "
-                        f"(نخستین گزینه به <b>{v['required_votes']}</b> رأی برسد همان اجرا می‌شود)\n\n"
-                        f"🎮 <b>ورود به ربات:</b> @{username}",
-                        reply_markup=kb(rows, home=False))
+                        f"(نخستین گزینه به <b>{v['required_votes']}</b> رأی برسد همان اجرا می‌شود)",
+                        "season", reply_markup=kb(rows, home=False))
                     await db.execute("UPDATE season_votes SET channel_msg=? WHERE id=?",
-                                     (m.message_id, v["id"]))
+                                     (getattr(m, "message_id", 0), v["id"]))
                 except Exception:
                     pass
         # بررسی حد رأی / پایان زمان

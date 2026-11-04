@@ -54,9 +54,9 @@ def get_setting_value(key, default=None):
 def get_initial_money():
     """بودجه اولیهٔ بازیکن تازه‌وارد (تنظیم initial_money — پیش‌فرض ۲۰۰)."""
     try:
-        return int(float(get_setting_value("initial_money", 200)))
+        return int(float(get_setting_value("initial_money", 200_000_000)))
     except (TypeError, ValueError):
-        return 200
+        return 200_000_000
 
 
 def firebase_request(method, path, data=None):

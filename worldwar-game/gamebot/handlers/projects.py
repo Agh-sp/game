@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery, Message
 
 from core.db import db
 from core.economy import announce, bump_progress, satisfaction_recompute
-from core.utils import fmt, hours_left, fmt_hm, iso, add_hours
+from core.utils import fmt, fmt_money, hours_left, fmt_hm, iso, add_hours
 from gamebot.common import back_row, kb, send_home
 
 router = Router()
@@ -42,7 +42,7 @@ async def project_list(call: CallbackQuery):
     lines = [f"<b>{title}</b>\n", "نام پروژه را بعداً از شما می‌پرسیم؛ خبر احداث در کانال اعلام می‌شود.\n"]
     rows = []
     for b in buildings:
-        cost = f"🪙 {fmt(b['cost_coins'])} سکه" if b["cost_coins"] else f"💰 {fmt(b['cost_money'])}"
+        cost = f"🪙 {fmt(b['cost_coins'])} سکه" if b["cost_coins"] else f"💰 {fmt_money(b['cost_money'])}"
         dur = f" | ⏱ {fmt_hm(b['duration_hours'])} ساخت" if b["duration_hours"] else ""
         req = f"\n   🔒 {b['requires_text']}" if b["requires_text"] else ""
         lines.append(f"{b['emoji']} {b['name']}: {cost}{dur}{req}")
@@ -122,7 +122,7 @@ async def create_project(message: Message, b: dict, name: str, height: int | Non
     if b["cost_coins"] and user["royal_coins"] < b["cost_coins"]:
         return await send_home(message, "❌ سکه شاهی کافی ندارید.")
     if cost_money and user["money"] < cost_money:
-        return await send_home(message, f"❌ بودجه کافی نیست. نیاز: {fmt(cost_money)}")
+        return await send_home(message, f"❌ بودجه کافی نیست. نیاز: {fmt_money(cost_money)}")
     if b["cost_coins"]:
         await db.execute("UPDATE users SET royal_coins=royal_coins-? WHERE id=?", (b["cost_coins"], user["id"]))
     if cost_money:
@@ -146,12 +146,13 @@ async def create_project(message: Message, b: dict, name: str, height: int | Non
         "SELECT c.* FROM countries c JOIN users u ON u.country_id=c.id WHERE u.id=?", (user["id"],))
     height_txt = f" ({fmt(height)} متر)" if height else ""
     await announce(message.bot,
-                   f"🏗 آغاز ساخت «{name}» ({b['name']}{height_txt}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}")
+                   f"🏗 آغاز ساخت «{name}» ({b['name']}{height_txt}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}",
+                   section="project")
     await send_home(message, 
         f"✅ ساخت «<b>{name}</b>» آغاز شد!\n"
         f"⏱ زمان ساخت: <b>{fmt_hm(duration)}</b>\n"
         f"🧱 مصالح مصرف‌شده: <b>{mat_cost}</b> واحد\n"
-        f"💰 هزینه: {fmt(cost_money)}" + (f" + 🪙 {fmt(b['cost_coins'])} سکه" if b["cost_coins"] else "")
+        f"💰 هزینه: {fmt_money(cost_money)}" + (f" + 🪙 {fmt(b['cost_coins'])} سکه" if b["cost_coins"] else "")
     )
     await projects_menu(_FakeCall(message))
 
@@ -194,12 +195,12 @@ async def company_buy(call: CallbackQuery, state: FSMContext):
     cost = (t["base_income"] or 0) * 10
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))
     if user["money"] < cost:
-        return await call.answer(f"❌ بودجه کافی نیست — نیاز: {fmt(cost)}", show_alert=True)
+        return await call.answer(f"❌ بودجه کافی نیست — نیاز: {fmt_money(cost)}", show_alert=True)
     await state.set_state(ProjectFSM.company_name)
     await state.update_data(company_type=tid, cost=cost)
     await call.answer()
     await call.message.edit_text(
-        f"{t['emoji']} <b>شرکت {t['title']}</b>\n\n💰 هزینه تأسیس: {fmt(cost)}\n"
+        f"{t['emoji']} <b>شرکت {t['title']}</b>\n\n💰 هزینه تأسیس: {fmt_money(cost)}\n"
         "📝 نام شرکت را بنویسید:\n برای انصراف /cancel"
     )
 
@@ -224,7 +225,8 @@ async def company_create(message: Message, state: FSMContext):
     country = await db.fetchone(
         "SELECT c.* FROM countries c JOIN users u ON u.country_id=c.id WHERE u.id=?", (user["id"],))
     await announce(message.bot,
-                   f"🏢 تاسیس شرکت «{name}» ({t['title']}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}")
+                   f"🏢 تاسیس شرکت «{name}» ({t['title']}) در کشور {country['flag'] if country else ''} {country['name'] if country else ''}",
+                   section="project")
     await bump_progress(user["id"], "built")
     await send_home(message, 
         f"✅ شرکت «<b>{name}</b>» تاسیس شد!\n💰 درآمد روزانه: {fmt(t['base_income'])}\n"
@@ -332,5 +334,5 @@ async def company_sell(call: CallbackQuery):
     await db.execute("UPDATE users SET money=money+? WHERE id=?", (price, call.from_user.id))
     await db.execute("DELETE FROM companies WHERE id=?", (cid,))
     await call.answer("💸 فروخته شد")
-    await send_home(call.message, f"💸 شرکت «{c['name']}» به دولت فروخته شد — {fmt(price)} به خزانه اضافه شد.")
+    await send_home(call.message, f"💸 شرکت «{c['name']}» به دولت فروخته شد — {fmt_money(price)} به خزانه اضافه شد.")
     await companies_menu(call)

@@ -103,7 +103,7 @@ export const UsersManager: React.FC = () => {
   const [newUsername, setNewUsername] = useState<string>('');
   const [newFullName, setNewFullName] = useState<string>('');
   const [newCountryId, setNewCountryId] = useState<string>('1');
-  const [newMoney, setNewMoney] = useState<string>('200');
+  const [newMoney, setNewMoney] = useState<string>('200000000');
   const [newCoins, setNewCoins] = useState<string>('10');
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);

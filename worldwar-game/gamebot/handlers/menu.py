@@ -8,7 +8,7 @@ from core.db import db, get_setting
 from core.economy import (bump_progress, income_amount, satisfaction_recompute,
                           settle_projects, settle_trainings, get_state, assets_of)
 from core.treaties import trust_partners
-from core.utils import fmt, hours_left, fmt_hm, iso, split_text
+from core.utils import fmt, fmt_money, hours_left, fmt_hm, iso, split_text
 from gamebot.common import (back_row, blocked_banner, country_display, empire_kb,
                             kb, main_menu_kb, manage_kb, server_line, home_row, send_home
 )
@@ -245,21 +245,42 @@ async def flag_set_execute(call: CallbackQuery):
     if not country:
         return await call.answer("کشور شما یافت نشد!", show_alert=True)
     
+    # پرچم انتخابی روی کشور ثبت می‌شود؛ seed دیگر آن را با پرچم پیش‌فرض بازنویسی نمی‌کند
     await db.execute("UPDATE countries SET flag_url=? WHERE id=?", (img["file_id"], country["id"]))
-    await call.answer("🎉 پرچم کشور با موفقیت تغییر یافت!", show_alert=True)
-    
+    try:
+        await call.answer("🎉 پرچم کشور با موفقیت تغییر یافت!", show_alert=True)
+    except Exception:
+        pass
+
     text = (
         f"🎉 <b>پرچم رسمی کشور {country['name']} با موفقیت به «{img['name']}» تغییر یافت!</b>\n\n"
         "این پرچم از این لحظه در تمام بیانیه‌های کانال، پروفایل امپراطوری و اطلاعات کشورتان نمایش داده می‌شود."
     )
     rows = [
         [("👁 مشاهده پرچم من", "g|myflag")],
+        [("🎨 انتخاب پرچم دیگر", "g|flag_pick|0")],
         [("🏰 بازگشت به امپراطوری من", "g|emp")],
     ]
+    markup = kb(rows)
+    # پیام قبلی عکس است و edit_text روی آن خطا می‌دهد → پرچم جدید را به‌صورت عکس می‌فرستیم
+    sent = False
     try:
-        await call.message.edit_text(text, reply_markup=kb(rows))
+        await call.bot.send_photo(call.from_user.id, img["file_id"], caption=text, reply_markup=markup)
+        sent = True
     except Exception:
-        await call.message.answer(text, reply_markup=kb(rows))
+        pass
+    if not sent:
+        try:
+            await call.message.answer(text, reply_markup=markup)
+        except Exception:
+            pass
+    # پیش‌نمایش «پرچم من» را تازه‌سازی می‌کنیم تا تغییر فوراً دیده شود
+    try:
+        await call.message.answer(
+            f"🏳️ پرچم فعال شما: {country['flag']} {country['name']} — «{img['name']}»",
+            reply_markup=markup)
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data == "g|flag_reset")
@@ -276,21 +297,27 @@ async def flag_reset_execute(call: CallbackQuery):
 
 @router.callback_query(F.data == "g|inc")
 async def income_info(call: CallbackQuery):
-    """درآمد خودکار شده — این دکمه فقط اطلاعات می‌دهد."""
+    """درآمد خودکار — نمایش جزئیات مالیات بر اساس جمعیت و رضایت (میلیونی)."""
+    from core.economy import income_breakdown
     state = await get_state(call.from_user.id)
-    daily = await income_amount(call.from_user.id)
+    info = await income_breakdown(call.from_user.id)
     minutes = int(float(await get_setting("income_interval_minutes", "30")))
-    per_tick = int(daily * minutes / (24 * 60))
+    per_tick = int(info["daily"] * minutes / (24 * 60))
     subsidy = state.get("subsidy_daily") or 0
     sub_slice = int(subsidy * minutes / (24 * 60))
     await call.answer()
     await call.message.edit_text(
-        f"💰 <b>درآمد خودکار</b>\n\nپرداخت درآمد مالیاتی هر <b>{minutes} دقیقه</b> خودکار انجام می‌شود و "
-        "پیام آن برایتان ارسال می‌شود.\n\n"
-        f"💵 درآمد روزانه کامل: <b>{fmt(daily)}</b>\n"
-        f"⏱ درآمد هر دوره: <b>{fmt(per_tick)}</b>\n"
-        + (f"🎁 کسر یارانه هر دوره: <b>{fmt(sub_slice)}</b>\n" if subsidy else "")
-        + f"🕐 آخرین پرداخت: {state.get('last_income') or '—'}",
+        f"💰 <b>درآمد خودکار و مالیات</b>\n\n"
+        f"پرداخت درآمد مالیاتی هر <b>{minutes} دقیقه</b> خودکار انجام می‌شود و پیام آن برایتان ارسال می‌شود.\n\n"
+        f"👥 جمعیت: <b>{fmt(info['population'])}</b> نفر\n"
+        f"🙂 رضایت مردم: <b>{info['satisfaction']}%</b> (ضریب ×{info['sat_mult']})\n"
+        f"💰 نرخ مالیات: <b>{round(info['tax_rate'] * 100, 1)}%</b> (ضریب ×{info['tax_mult']})\n"
+        f"💵 درآمد روزانه کامل: <b>{fmt_money(info['daily'])}</b>\n"
+        f"⏱ درآمد هر دوره: <b>{fmt_money(per_tick)}</b>\n"
+        + (f"🎁 کسر یارانه هر دوره: <b>{fmt_money(sub_slice)}</b>\n" if subsidy else "")
+        + f"🕐 آخرین پرداخت: {state.get('last_income') or '—'}\n\n"
+        "💡 هرچه جمعیت و رضایت مردم بیشتر باشد مالیات بیشتری می‌گیرید؛ "
+        "با دکمه «💰 مالیات» نرخ را می‌توانید بالا ببرید (رضایت کم می‌شود).",
         reply_markup=kb([back_row("g|emp")]))
 
 

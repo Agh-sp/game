@@ -10,7 +10,7 @@ from adminbot.crud import cd, kb
 from adminbot.tools import log_action, notify_user
 from core.db import db, get_initial_money
 from core.economy import army_power, get_country
-from core.utils import fmt, tehran
+from core.utils import fmt, fmt_money, tehran
 
 router = Router()
 PAGE = 8
@@ -429,10 +429,10 @@ async def build_reset_wealth_payload() -> tuple[str, any]:
         "عملیات مورد نظر خود را با دقت انتخاب نمایید:"
     )
     markup = kb([
-        [(f"🔥 ریست کامل هر دو (سکه=۰ | پول={fmt(await get_initial_money())})",
+        [(f"🔥 ریست کامل هر دو (سکه=۰ | پول={fmt_money(await get_initial_money())})",
           "a|conf_reset_wealth|both_default")],
         [("🪙 فقط صفر کردن سکه شاهی همه (۰ سکه)", "a|conf_reset_wealth|coins_zero")],
-        [(f"💰 فقط ریست پول همه به {fmt(await get_initial_money())} پایه",
+        [(f"💰 فقط ریست پول همه به {fmt_money(await get_initial_money())} پایه",
           "a|conf_reset_wealth|money_default")],
         [("🚫 فقط صفر کردن موجودی پول همه (۰ تومان)", "a|conf_reset_wealth|money_zero")],
         [("◀️ بازگشت به منوی کاربران", "a|usr"), ("◀️ پنل اصلی", "a|root")],

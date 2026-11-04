@@ -19,7 +19,7 @@ from core.treaties import (TREATY_KINDS, break_treaty, confirm_treaty,
                            create_treaty, find_treaty, reject_treaty,
                            announce_treaty, active_treaties, diplomacy_add)
 from core.straits import capture_strait, straits_menu_text
-from core.utils import fmt, iso, clamp
+from core.utils import fmt, fmt_money, iso, clamp
 from gamebot.common import back_row, dm, kb, safe_edit, send_home
 
 router = Router()
@@ -1438,7 +1438,7 @@ async def rescue_sale_pick(call: CallbackQuery, state: FSMContext):
     await state.update_data(rs_key=key)
     await call.answer()
     await call.message.edit_text(
-        f"🏥 فروش {title} به سازمان نجات\nقیمت هر واحد: <b>{fmt(price)}</b>\n\n"
+        f"🏥 فروش {title} به سازمان نجات\nقیمت هر واحد: <b>{fmt_money(price)}</b>\n\n"
         "مقدار را بنویسید:\n برای انصراف /cancel")
 
 
@@ -1471,7 +1471,7 @@ async def rescue_sale_input(message: Message, state: FSMContext):
                        "از جنگ‌زدگان جهان حمایت کرد. 👏",
                        "rescue")
     await send_home(message, 
-        f"✅ {fmt(qty)} {title} به سازمان نجات فروخته شد.\n💰 درآمد: {fmt(total)} (+رضایت ۰.۵)")
+        f"✅ {fmt(qty)} {title} به سازمان نجات فروخته شد.\n💰 درآمد: {fmt_money(total)} (+رضایت ۰.۵)")
     await rescue_sale_menu(_fake_call(message))
 
 
