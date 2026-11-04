@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from core.db import db, get_setting
+from core.db import db, get_initial_money, get_setting
 from core.economy import bump_progress, get_state
 from core.utils import fmt, fmt_hm, iso
 from gamebot.common import check_membership, join_keyboard, kb, main_menu_kb, send_home
@@ -26,8 +26,8 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     user = message.from_user
     await db.execute(
-        "INSERT OR IGNORE INTO users(id, username, full_name) VALUES(?,?,?)",
-        (user.id, user.username or "", user.full_name or ""),
+        "INSERT OR IGNORE INTO users(id, username, full_name, money) VALUES(?,?,?,?)",
+        (user.id, user.username or "", user.full_name or "", await get_initial_money()),
     )
     await db.execute("UPDATE users SET username=?, full_name=? WHERE id=?",
                      (user.username or "", user.full_name or "", user.id))

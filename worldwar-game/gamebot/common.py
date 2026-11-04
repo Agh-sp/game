@@ -81,6 +81,36 @@ def home_row() -> list[tuple[str, str]]:
     return [("🏠 منو شروع", "g|main")]
 
 
+async def safe_edit(target, text: str, reply_markup=None):
+    """ویرایش امن پیام: خطای «تغییر نکرده» را نادیده می‌گیرد و در صورت خطای
+    تجزیه HTML، پیام را بدون فرمت یا به‌صورت پیام تازه می‌فرستد.
+
+    target می‌تواند CallbackQuery یا Message باشد.
+    """
+    msg = getattr(target, "message", target)
+    try:
+        await msg.edit_text(text, reply_markup=reply_markup)
+        return True
+    except Exception as e:
+        err = str(e).lower()
+        if "message is not modified" in err:
+            return True
+        try:
+            await msg.edit_text(text, reply_markup=reply_markup, parse_mode=None)
+            return True
+        except Exception:
+            pass
+        try:
+            await msg.answer(text, reply_markup=reply_markup)
+            return True
+        except Exception:
+            try:
+                await msg.answer(text, reply_markup=reply_markup, parse_mode=None)
+                return True
+            except Exception:
+                return False
+
+
 async def send_home(message, text: str, **kw):
     """ارسال پیام متنی با کیبورد تمیز."""
     rm = kw.pop("reply_markup", None)

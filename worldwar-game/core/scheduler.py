@@ -311,8 +311,14 @@ async def _income_loop(bot) -> None:
 
 
 async def _slow_loop(bot) -> None:
-    """کارهای دقیقه‌ای: سیزن، نجات، ارز."""
+    """کارهای دقیقه‌ای: سیزن، نجات، ارز و بستن رای‌گیری‌های سازمان ملل."""
     while True:
+        try:
+            # بستن خودکار رای‌گیری‌های تمام‌شده (مجوز جنگ ۳۰ دقیقه‌ای و ...)
+            from gamebot.handlers.war import settle_votes
+            await settle_votes(bot)
+        except Exception:
+            log.exception("settle votes failed")
         try:
             await season_votes_task(bot)
         except Exception:

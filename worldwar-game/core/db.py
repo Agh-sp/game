@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name TEXT DEFAULT '',
   joined_at TEXT DEFAULT (datetime('now')),
   royal_coins INTEGER DEFAULT 0,
-  money INTEGER DEFAULT 50000000,
+  money INTEGER DEFAULT 200,
   country_id INTEGER,
   country_taken_at TEXT,
   banned INTEGER DEFAULT 0
@@ -660,6 +660,14 @@ async def get_setting(key: str, default: str = "") -> str:
     return (row["value"] if row else default) or default
 
 
+async def get_initial_money() -> int:
+    """بودجه اولیه هر بازیکن تازه‌وارد (قابل تنظیم از پنل ادمین)."""
+    try:
+        return int(float(await get_setting("initial_money", "200")))
+    except (TypeError, ValueError):
+        return 200
+
+
 async def set_setting(key: str, value: str) -> None:
     await db.execute(
         "INSERT INTO settings(key, value) VALUES(?, ?) "
@@ -720,6 +728,10 @@ DEFAULT_SETTINGS = {
     "bot_off": "0",
     "trade_tax_percent": "5",
     "income_base": "100",
+    # بودجه اولیه‌ای که هر بازیکن تازه‌وارد دریافت می‌کند (قابل تغییر از پنل ادمین)
+    "initial_money": "200",
+    # رای‌گیری مجوز جنگ سازمان ملل — ۳۰ دقیقه
+    "war_vote_minutes": "30",
     "vote_duration_hours": "24",
     "country_change_hours": "8",
     "cyber_cooldown_hours": "6",

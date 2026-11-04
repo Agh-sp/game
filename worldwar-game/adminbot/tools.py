@@ -27,6 +27,31 @@ async def notify_user(user_id: int, text: str) -> bool:
         return False
 
 
+async def safe_edit(target, text: str, reply_markup=None) -> bool:
+    """ویرایش امن پیام در ربات ادمین (تحمل خطای «تغییر نکرده»/HTML)."""
+    msg = getattr(target, "message", target)
+    try:
+        await msg.edit_text(text, reply_markup=reply_markup)
+        return True
+    except Exception as e:
+        if "message is not modified" in str(e).lower():
+            return True
+        try:
+            await msg.edit_text(text, reply_markup=reply_markup, parse_mode=None)
+            return True
+        except Exception:
+            pass
+        try:
+            await msg.answer(text, reply_markup=reply_markup)
+            return True
+        except Exception:
+            try:
+                await msg.answer(text, reply_markup=reply_markup, parse_mode=None)
+                return True
+            except Exception:
+                return False
+
+
 async def log_action(admin_id: int, action: str, detail: str = "") -> None:
     await db.execute(
         "INSERT INTO admin_logs(admin_id, action, detail) VALUES(?,?,?)",

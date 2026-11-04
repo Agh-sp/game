@@ -75,6 +75,7 @@ EQUIPMENT_CATEGORIES = [
     ("sea", "دریایی", "⚓"),
     ("cyber", "سایبری", "💻"),
     ("space", "فضایی", "🛰️"),
+    ("missile", "موشکی", "🚀"),
 ]
 
 # (category_key, subcategory, name, emoji, atk, def, cyber, speed, price_money, price_coins, requires_text)
@@ -123,6 +124,14 @@ EQUIPMENT = [
     ("space", "space_weapon", "سلاح لیزر فضایی مداری", "🔆", 5000, 0, 0, 5, 0, 300, ""),
     ("space", "space_weapon", "موشک بالستیک مداری از ماه", "🌙", 8500, 0, 0, 5, 0, 500, "نیازمند شهر فضایی"),
     ("space", "space_weapon", "سامانه شهاب‌سنگ هدایت‌شده", "☄️", 7000, 0, 0, 4, 0, 450, ""),
+    # ── موشکی (زمین‌به‌زمین / ضدکشتی / پدافند موشکی) ──
+    ("missile", "cruise", "موشک کروز سومار", "🚀", 1200, 80, 0, 4, 30_000_000, 0, ""),
+    ("missile", "cruise", "موشک کروز دریایی قدیر", "🛫", 1900, 120, 0, 5, 65_000_000, 0, ""),
+    ("missile", "ballistic", "موشک بالستیک فاتح ۱۱۰", "🎯", 2400, 100, 0, 4, 55_000_000, 0, ""),
+    ("missile", "ballistic", "موشک بالستیک خرمشهر", "☄️", 3600, 150, 0, 3, 110_000_000, 0, ""),
+    ("missile", "antiship", "موشک ضدکشتی نور", "🌊", 1500, 120, 0, 5, 35_000_000, 0, ""),
+    ("missile", "antiship", "موشک ضدکشتی خلیج فارس", "⚓", 2600, 180, 0, 5, 85_000_000, 0, ""),
+    ("missile", "sam", "سامانه پدافند موشکی باور ۳۷۳", "🛡️", 250, 2100, 0, 3, 90_000_000, 0, ""),
 ]
 
 SOLDIER_TYPES = [
@@ -315,12 +324,12 @@ async def run(db) -> None:
         await db.execute(
             "INSERT OR IGNORE INTO settings(key, value) VALUES('season_mode','worldwar')")
 
-    if await _count(db, "equipment_categories") == 0:
-        for key, title, emoji in EQUIPMENT_CATEGORIES:
-            await db.execute(
-                "INSERT INTO equipment_categories(key, title, emoji) VALUES(?,?,?)",
-                (key, title, emoji),
-            )
+    # دسته‌بندی‌ها: هر دسته جدید (مثل موشکی) حتی در دیتابیس‌های قبلی اضافه می‌شود
+    for key, title, emoji in EQUIPMENT_CATEGORIES:
+        await db.execute(
+            "INSERT OR IGNORE INTO equipment_categories(key, title, emoji) VALUES(?,?,?)",
+            (key, title, emoji),
+        )
 
     # تجهیزات نظامی با زیردسته‌ها و مقادیر پایه — غیرمخرب و بدون تغییر ID
     cats = {r["key"]: r["id"] for r in await db.fetchall("SELECT id, key FROM equipment_categories")}

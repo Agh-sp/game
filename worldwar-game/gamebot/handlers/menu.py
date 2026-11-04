@@ -48,7 +48,8 @@ async def main_menu(call: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "g|emp")
-async def empire(call: CallbackQuery):
+async def empire(call: CallbackQuery, state: FSMContext):
+    await state.clear()  # خروج از حالت‌های نیمه‌کاره (مثلاً چت مذاکره) برای جلوگیری از بلعیده شدن پیام‌ها
     await settle_projects(call.from_user.id, call.bot)
     await settle_trainings(call.from_user.id)
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))

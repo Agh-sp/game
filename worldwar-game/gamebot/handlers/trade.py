@@ -20,7 +20,7 @@ from core.treaties import (TREATY_KINDS, break_treaty, confirm_treaty,
                            announce_treaty, active_treaties, diplomacy_add)
 from core.straits import capture_strait, straits_menu_text
 from core.utils import fmt, iso, clamp
-from gamebot.common import back_row, kb, send_home, dm
+from gamebot.common import back_row, dm, kb, safe_edit, send_home
 
 router = Router()
 neg_router = Router()  # آخرین روتر — برای گفتگوی آزاد مذاکره
@@ -45,8 +45,9 @@ class TradeFSM(StatesGroup):
 
 
 async def _cname(user_id: int) -> str:
+    """نام کشور برای نمایش در متن (خروجی HTML-safe)."""
     c = await get_country(user_id)
-    return f"{c['flag']} {c['name']}" if c else "؟"
+    return f"{c['flag']} {html.escape(c['name'])}" if c else "؟"
 
 
 def _sec_on(key: str):
@@ -191,10 +192,7 @@ async def negotiation_menu(call: CallbackQuery):
         await call.answer()
     except Exception:
         pass
-    try:
-        await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
-    except Exception:
-        await call.message.answer("\n".join(lines), reply_markup=kb(rows))
+    await safe_edit(call, "\n".join(lines), reply_markup=kb(rows))
 
 
 @router.callback_query(F.data == "g|negnew")
@@ -212,14 +210,11 @@ async def negotiation_new(call: CallbackQuery):
         "کشور مورد نظر خود را جهت افتتاح کانال دیپلماتیک محرمانه انتخاب فرمایید:\n"
         "<i>(می‌توانید با رهبران بازیکنان یا هیئت‌های دیپلماتیک رسمی ملل جهان وارد گفتگو شوید)</i>"
     )
-    try:
-        await call.message.edit_text(text, reply_markup=kb(rows))
-    except Exception:
-        await call.message.answer(text, reply_markup=kb(rows))
+    await safe_edit(call, text, reply_markup=kb(rows))
 
 
 @router.callback_query(F.data.startswith("g|negr|"))
-async def negotiation_request(call: CallbackQuery):
+async def negotiation_request(call: CallbackQuery, state: FSMContext):
     target = int(call.data.split("|")[2])
     if target == call.from_user.id:
         return await call.answer("نمی‌توانید با کشور خودتان مذاکره کنید!", show_alert=True)
@@ -273,7 +268,9 @@ async def negotiation_request(call: CallbackQuery):
             log.warning("DM failed to negotiation target %s: %s", target, e)
         await call.answer("📨 درخواست مذاکره ارسال گردید")
 
-    # هدایت مستقیم به اتاق مذاکره
+    # هدایت مستقیم به اتاق مذاکره + فعال‌سازی حالت چت
+    await state.set_state(TradeFSM.neg_chat)
+    await state.update_data(active_neg_id=neg_id)
     await _show_negotiation_room(call, neg_id)
 
 
@@ -308,7 +305,7 @@ async def _open_room(bot, neg_id: int) -> None:
 
 
 @router.callback_query(F.data.startswith("g|nega|"))
-async def negotiation_approve(call: CallbackQuery):
+async def negotiation_approve(call: CallbackQuery, state: FSMContext):
     neg_id = int(call.data.split("|")[2])
     neg = await db.fetchone("SELECT * FROM negotiations WHERE id=?", (neg_id,))
     if not neg:
@@ -335,6 +332,8 @@ async def negotiation_approve(call: CallbackQuery):
         except Exception as e:
             log.warning("DM approve failed to host %s: %s", neg["initiator_id"], e)
     await _open_room(call.bot, neg_id)
+    await state.set_state(TradeFSM.neg_chat)
+    await state.update_data(active_neg_id=neg_id)
     await _show_negotiation_room(call, neg_id)
 
 
@@ -358,10 +357,15 @@ async def negotiation_decline(call: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("g|negroom|"))
-async def negotiation_room(call: CallbackQuery, state: FSMContext = None):
-    if state:
-        await state.clear()
+async def negotiation_room(call: CallbackQuery, state: FSMContext):
+    """ورود به اتاق مذاکره؛ هر متن بعدی بازیکن مستقیم در همین اتاق ارسال می‌شود."""
     neg_id = int(call.data.split("|")[2])
+    members = {m["user_id"] for m in await db.fetchall(
+        "SELECT user_id FROM negotiation_members WHERE neg_id=?", (neg_id,))}
+    if call.from_user.id in members:
+        # state قبلی (مثلاً خرید نیمه‌کاره) پاک می‌شود تا پیام‌های چت بلعیده نشوند
+        await state.set_state(TradeFSM.neg_chat)
+        await state.update_data(active_neg_id=neg_id)
     await _show_negotiation_room(call, neg_id)
 
 
@@ -416,20 +420,12 @@ async def _show_negotiation_room(call: CallbackQuery, neg_id: int):
         pass
 
     full_content = "\n".join(lines)
-    try:
-        await call.message.edit_text(full_content, reply_markup=kb(rows))
-    except Exception as e:
-        err_msg = str(e).lower()
-        if "message is not modified" in err_msg:
-            try:
-                await call.answer("🔄 چت به‌روز است")
-            except Exception:
-                pass
-        else:
-            try:
-                await call.message.answer(full_content, reply_markup=kb(rows))
-            except Exception:
-                pass
+    ok = await safe_edit(call, full_content, reply_markup=kb(rows))
+    if not ok:
+        try:
+            await call.answer("🔄 چت به‌روز است")
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data.startswith("g|negsend|"))
@@ -447,20 +443,22 @@ async def negotiation_send_prompt(call: CallbackQuery, state: FSMContext):
         "<i>(برای انصراف /cancel بزنید)</i>"
     )
     rows = [[("◀️ بازگشت به اتاق مذاکره", f"g|negroom|{neg_id}")]]
-    try:
-        await call.message.edit_text(text, reply_markup=kb(rows))
-    except Exception:
-        await call.message.answer(text, reply_markup=kb(rows))
+    await safe_edit(call, text, reply_markup=kb(rows))
 
 
 @router.message(TradeFSM.neg_chat)
 async def negotiation_chat_input(message: Message, state: FSMContext):
+    """هر پیام متنی بازیکن داخل اتاق مذاکره — بدون نیاز به دکمه، مستقیم ارسال می‌شود."""
     data = await state.get_data()
     neg_id = data.get("active_neg_id")
     text = (message.text or "").strip()
+    if text in ("/cancel", "لغو", "خروج", "پایان"):
+        await state.clear()
+        return await send_home(message, "🚪 از اتاق مذاکره خارج شدید.",
+                               reply_markup=kb([back_row("g|neg", "◀️ لیست مذاکرات")]))
     if not text:
         return await send_home(message, "❌ لطفاً متن پیام را ارسال کنید.")
-    await state.clear()
+    # state عمداً پاک نمی‌شود تا گفتگو پشت‌سرهم ادامه پیدا کند
     await _send_negotiation_msg(message, neg_id, text)
 
 
@@ -525,6 +523,8 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
     safe_sender = html.escape(sender_name)
 
     sent_count = 0
+    human_total = 0
+    human_delivered = 0
     npc_targets = []
     for m in members:
         uid = m["user_id"]
@@ -532,6 +532,7 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
             npc_targets.append(uid)
             sent_count += 1
             continue
+        human_total += 1
         try:
             res = await dm(message.bot,
                 uid,
@@ -545,6 +546,7 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
                 ]))
             if res:
                 sent_count += 1
+                human_delivered += 1
         except Exception as e:
             log.warning("DM failed to negotiation member %s: %s", uid, e)
 
@@ -570,10 +572,14 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
         except Exception:
             pass
 
+    if human_total and not human_delivered:
+        delivery = ("⚠️ پیام در اتاق ثبت شد اما به طرف مقابل تحویل داده نشد "
+                    "(او هنوز ربات را استارت نکرده یا ربات را بلاک کرده است).")
+    else:
+        delivery = f"👥 تحویل داده شده به {human_delivered or 'طرف مقابل'} نفر"
     confirm_text = (
         f"✅ <b>پیام شما در مذاکره #{neg_id} ثبت و ارسال شد:</b>\n\n"
-        f"«{safe_text}»\n\n"
-        f"👥 تحویل داده شده به طرف مقابل"
+        f"«{safe_text}»\n\n{delivery}"
     )
     rows = [
         [("✍️ ارسال پیام بعدی", f"g|negsend|{neg_id}")],
@@ -593,12 +599,16 @@ async def negotiation_relay(message: Message, state: FSMContext):
     curr_state = await state.get_state()
     if curr_state is not None and curr_state != "TradeFSM:neg_chat":
         return
-    row = await db.fetchone(
-        "SELECT n.* FROM negotiations n JOIN negotiation_members m ON m.neg_id=n.id "
-        "WHERE m.user_id=? AND n.status IN ('open','pending') ORDER BY n.id DESC", (message.from_user.id,))
-    if not row:
-        return
-    neg_id = row["id"]
+    data = await state.get_data()
+    neg_id = data.get("active_neg_id")
+    if not neg_id:
+        row = await db.fetchone(
+            "SELECT n.* FROM negotiations n JOIN negotiation_members m ON m.neg_id=n.id "
+            "WHERE m.user_id=? AND n.status IN ('open','pending') ORDER BY n.id DESC",
+            (message.from_user.id,))
+        if not row:
+            return
+        neg_id = row["id"]
     text = (message.text or "").strip()
     if not text or len(text) > 1000:
         return

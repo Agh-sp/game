@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery, Message
 
 from adminbot.auth import has
 from adminbot.crud import cd, kb
-from adminbot.tools import log_action, notify_user
+from adminbot.tools import log_action, notify_user, safe_edit
 from core.db import db, get_setting, set_setting
 from core.utils import fmt, tehran
 
@@ -159,7 +159,11 @@ async def receipts_page(status: str, page: int) -> dict:
             what = f"خرید {fmt(r['coins'])} سکه شاهی"
         who = r["full_name"] or str(r["user_id"])
         lines.append(f"#{r['id']} — {who} — {what} — {fmt(r['toman'])} تومان — {tehran(r['created_at'])}")
-        buttons.append([(f"🧾 #{r['id']} {who} — {fmt(r['toman'])} ت", f"a|rcpo|{r['id']}")])
+        row_btns = [(f"🧾 #{r['id']} {who[:16]}", f"a|rcpo|{r['id']}")]
+        if r["status"] == "pending":
+            row_btns.append((f"✅ تأیید #{r['id']}", f"a|rcpok|{r['id']}"))
+            row_btns.append((f"❌ رد #{r['id']}", f"a|rcpno|{r['id']}"))
+        buttons.append(row_btns)
     if not rows:
         lines.append("<i>— خالی —</i>")
     tabs = [("⏳ در انتظار", f"a|rcp|pending|0"), ("✅ تأییدشده", f"a|rcp|approved|0"),
@@ -169,7 +173,7 @@ async def receipts_page(status: str, page: int) -> dict:
         nav.append(("‹ قبلی", f"a|rcp|{status}|{page - 1}"))
     if (page + 1) * PAGE < total:
         nav.append(("بعدی ›", f"a|rcp|{status}|{page + 1}"))
-    all_rows = [[b] for b in buttons] + [nav, [("◀️ بازگشت", "a|eco")]]
+    all_rows = [list(b) for b in buttons] + [nav, [("◀️ بازگشت", "a|eco")]]
     return {"text": "\n".join(lines), "reply_markup": kb(all_rows)}
 
 
@@ -180,7 +184,7 @@ async def receipts_list(call: CallbackQuery, perms: set):
     _, _, status, page = call.data.split("|")
     payload = await receipts_page(status, int(page))
     await call.answer()
-    await call.message.edit_text(payload["text"], reply_markup=payload["reply_markup"])
+    await safe_edit(call, payload["text"], payload["reply_markup"])
 
 
 @router.callback_query(F.data.startswith("a|rcpo|"))
@@ -218,7 +222,11 @@ async def receipt_open(call: CallbackQuery, perms: set):
         try:
             await call.message.answer_photo(r["photo_file_id"], caption=f"🧾 عکس فیش #{r['id']}")
         except Exception:
-            pass
+            try:
+                await call.bot.send_photo(call.from_user.id, r["photo_file_id"],
+                                          caption=f"🧾 عکس فیش #{r['id']}")
+            except Exception:
+                pass
     buttons = []
     if r["status"] == "pending":
         buttons.append([("✅ تأیید و اعمال", f"a|rcpok|{rid}"), ("❌ رد کردن", f"a|rcpno|{rid}")])
@@ -226,22 +234,16 @@ async def receipt_open(call: CallbackQuery, perms: set):
     buttons.append([("✏️ ویرایش خام", cd("rcp", "r", rid))])
     buttons.append([(f"◀️ بازگشت", f"a|rcp|{r['status']}|0")])
     await call.answer()
-    await call.message.edit_text(text, reply_markup=kb(buttons))
+    await safe_edit(call, text, kb(buttons))
 
 
-@router.callback_query(F.data.startswith("a|rcpok|"))
-async def receipt_approve(call: CallbackQuery, perms: set):
-    if not has(perms, "economy"):
-        return await call.answer("⛔️ دسترسی ندارید", show_alert=True)
-    rid = int(call.data.split("|")[2])
-    r = await db.fetchone("SELECT * FROM receipts WHERE id=? AND status='pending'", (rid,))
-    if not r:
-        return await call.answer("فیش در انتظار نیست", show_alert=True)
+async def apply_receipt(r: dict, admin_id: int) -> str:
+    """تأیید و اعمال یک فیش (کشور یا سکه شاهی) — خروجی: متن نتیجه."""
     from core.utils import iso
+    rid = r["id"]
     await db.execute(
         "UPDATE receipts SET status='approved', reviewed_by=?, reviewed_at=? WHERE id=?",
-        (call.from_user.id, iso(), rid))
-    
+        (admin_id, iso(), rid))
     if r["kind"] == "country":
         country = await db.fetchone("SELECT * FROM countries WHERE id=?", (r["country_id"],))
         cur_owner = country.get("owner_id") if country else None
@@ -255,32 +257,60 @@ async def receipt_approve(call: CallbackQuery, perms: set):
             await get_state(r["user_id"])
             currency = country.get("currency") or country["name"]
             await db.execute(
-                "UPDATE states SET currency_name=?, materials=COALESCE(materials, 0)+1000, energy=COALESCE(energy, 0)+5000, water=COALESCE(water, 0)+5000, gas=COALESCE(gas, 0)+5000 WHERE user_id=?",
-                (currency, r["user_id"])
-            )
+                "UPDATE states SET currency_name=?, materials=COALESCE(materials, 0)+1000, "
+                "energy=COALESCE(energy, 0)+5000, water=COALESCE(water, 0)+5000, "
+                "gas=COALESCE(gas, 0)+5000 WHERE user_id=?",
+                (currency, r["user_id"]))
             await notify_user(
                 r["user_id"],
-                f"✅ پرداخت شما تأیید شد! کشور {country['flag']} <b>{country['name']}</b> به شما واگذار شد. 🎉\n\nهم‌اکنون با دستور /start وارد مرکز فرماندهی امپراطوری شوید 🌍")
+                f"✅ پرداخت شما تأیید شد! کشور {country['flag']} <b>{country['name']}</b> "
+                "به شما واگذار شد. 🎉\n\nهم‌اکنون با دستور /start وارد مرکز فرماندهی امپراتوری شوید 🌍")
+            result = "✅ فیش تأیید شد و کشور به بازیکن واگذار شد."
         else:
             await notify_user(
                 r["user_id"],
                 "⚠️ پرداخت شما تأیید شد اما کشور انتخابی هم‌اکنون به بازیکن دیگری واگذار شده است. "
                 "با پشتیبانی تماس بگیرید تا کشور دیگری یا سکه شاهی معادل دریافت کنید.")
+            result = "⚠️ کشور در این فاصله به بازیکن دیگری واگذار شده بود؛ به بازیکن اطلاع داده شد."
     else:
         coins_to_add = int(r.get("coins") or 0)
         if coins_to_add <= 0 and (r.get("toman") or 0) > 0:
-            price = int(await get_setting("coin_price_toman", "1000"))
+            price = int(await get_setting("coin_price_toman", "1000")) or 1
             coins_to_add = max(1, int(r["toman"] // price))
         await db.execute("UPDATE users SET royal_coins=COALESCE(royal_coins, 0)+? WHERE id=?",
                          (coins_to_add, r["user_id"]))
         await notify_user(
             r["user_id"],
             f"✅ پرداخت شما تأیید شد! 🪙 <b>{fmt(coins_to_add)} سکه شاهی</b> به حساب شما اضافه شد. 🎉")
-            
-    await log_action(call.from_user.id, "فیش", f"تأیید فیش #{rid} کاربر {r['user_id']}")
-    await call.answer("✅ تأیید و اعمال شد")
+        result = f"✅ فیش تأیید شد و {fmt(coins_to_add)} سکه به بازیکن اضافه شد."
+    await log_action(admin_id, "فیش", f"تأیید فیش #{rid} کاربر {r['user_id']}")
+    return result
+
+
+async def reject_receipt(r: dict, admin_id: int) -> str:
+    from core.utils import iso
+    await db.execute(
+        "UPDATE receipts SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
+        (admin_id, iso(), r["id"]))
+    await notify_user(
+        r["user_id"],
+        "❌ فیش پرداخت شما رد شد. در صورت هرگونه سوال با پشتیبانی در ارتباط باشید.")
+    await log_action(admin_id, "فیش", f"رد فیش #{r['id']} کاربر {r['user_id']}")
+    return "❌ فیش رد شد."
+
+
+@router.callback_query(F.data.startswith("a|rcpok|"))
+async def receipt_approve(call: CallbackQuery, perms: set):
+    if not has(perms, "economy"):
+        return await call.answer("⛔️ دسترسی ندارید", show_alert=True)
+    rid = int(call.data.split("|")[2])
+    r = await db.fetchone("SELECT * FROM receipts WHERE id=? AND status='pending'", (rid,))
+    if not r:
+        return await call.answer("این فیش در انتظار نیست (قبلاً بررسی شده)", show_alert=True)
+    result = await apply_receipt(r, call.from_user.id)
+    await call.answer(result[:190], show_alert=True)
     payload = await receipts_page("pending", 0)
-    await call.message.edit_text(payload["text"], reply_markup=payload["reply_markup"])
+    await safe_edit(call, payload["text"], payload["reply_markup"])
 
 
 @router.callback_query(F.data.startswith("a|rcpno|"))
@@ -290,15 +320,27 @@ async def receipt_reject(call: CallbackQuery, perms: set):
     rid = int(call.data.split("|")[2])
     r = await db.fetchone("SELECT * FROM receipts WHERE id=? AND status='pending'", (rid,))
     if not r:
-        return await call.answer("فیش در انتظار نیست", show_alert=True)
-    from core.utils import iso
-    await db.execute(
-        "UPDATE receipts SET status='rejected', reviewed_by=?, reviewed_at=? WHERE id=?",
-        (call.from_user.id, iso(), rid))
-    await notify_user(
-        r["user_id"],
-        "❌ فیش پرداخت شما رد شد. در صورت هرگونه سوال با پشتیبانی در ارتباط باشید.")
-    await log_action(call.from_user.id, "فیش", f"رد فیش #{rid} کاربر {r['user_id']}")
-    await call.answer("❌ رد شد")
+        return await call.answer("این فیش در انتظار نیست (قبلاً بررسی شده)", show_alert=True)
+    result = await reject_receipt(r, call.from_user.id)
+    await call.answer(result, show_alert=True)
     payload = await receipts_page("pending", 0)
-    await call.message.edit_text(payload["text"], reply_markup=payload["reply_markup"])
+    await safe_edit(call, payload["text"], payload["reply_markup"])
+
+
+@router.message(Command("approve", "reject"))
+async def cmd_receipt_action(message: Message, perms: set):
+    """تأیید/رد سریع فیش با دستور: /approve 12 یا /reject 12"""
+    if not has(perms, "economy"):
+        return await message.answer("⛔️ دسترسی ندارید")
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        return await message.answer("استفاده: <code>/approve 12</code> یا <code>/reject 12</code>")
+    rid = int(parts[1])
+    r = await db.fetchone("SELECT * FROM receipts WHERE id=? AND status='pending'", (rid,))
+    if not r:
+        return await message.answer("❌ فیشی با این شماره در انتظار تأیید نیست.")
+    if parts[0].lower().startswith("/approve"):
+        result = await apply_receipt(r, message.from_user.id)
+    else:
+        result = await reject_receipt(r, message.from_user.id)
+    await message.answer(result + "\n\n🧾 برای دیدن لیست فیش‌ها: /receipts")

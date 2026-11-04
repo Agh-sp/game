@@ -446,6 +446,8 @@ SETTING_LABELS = {
     "bot_off": "🔴 خاموشی ربات (۰/۱)",
     "trade_tax_percent": "💼 مالیات تجارت (٪)",
     "income_base": "💰 ضریب درآمد روزانه",
+    "initial_money": "💵 بودجه اولیه بازیکن جدید",
+    "war_vote_minutes": "🗳 مدت رای‌گیری مجوز جنگ (دقیقه)",
     "vote_duration_hours": "⏳ مدت رای‌گیری (ساعت)",
     "country_change_hours": "⏰ فاصله تغییر کشور (ساعت)",
     "cyber_cooldown_hours": "🕶 فاصله حمله سایبری (ساعت)",
