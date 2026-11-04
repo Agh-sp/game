@@ -22,6 +22,7 @@ async def _on_startup(bot: Bot) -> None:
             BotCommand(command="start", description="🚀 شروع بازی و ورود به امپراطوری"),
             BotCommand(command="cancel", description="❌ انصراف و بازگشت به منو"),
             BotCommand(command="admin", description="🛡 پنل مدیریت و ادمین"),
+            BotCommand(command="panel", description="🎛 پنل سریع ادمین‌ها داخل بازی"),
         ])
     except Exception as e:
         log.warning("تنظیم دستورات تلگرام انجام نشد: %s", e)
@@ -42,9 +43,10 @@ def create_dispatcher() -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
     dp.errors.register(_global_error_handler)
     dp.startup.register(_on_startup)
-    from gamebot.handlers import (start, menu, people, projects, army, gov, war,
+    from gamebot.handlers import (start, adminpanel, menu, people, projects, army, gov, war,
                                   un, misc, trade, oil, rescue, politics)
-    for r in (start, menu, people, projects, army, gov, politics, war, un, misc, trade, oil, rescue):
+    for r in (start, adminpanel, menu, people, projects, army, gov, politics, war, un, misc,
+              trade, oil, rescue):
         dp.include_router(r.router)
     # روتر گفتگوی مذاکره باید آخرین باشد تا FSMهای دیگر اولویت داشته باشند
     dp.include_router(trade.neg_router)
