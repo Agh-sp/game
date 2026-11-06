@@ -40,6 +40,7 @@ log = logging.getLogger(__name__)
 DEFAULT_TAX_BASE_M = 10.0        # میلیون — پایهٔ مالیات برای ضریب ۱
 DEFAULT_TAX_STEP_M = 8.0         # میلیون — به ازای هر واحد ضریب اقتصاد کشور
 DEFAULT_OIL_UNIT_M = 1.0         # میلیون — ضریب تبدیل oil_income_base به پول
+DEFAULT_OIL_FLOOR_M = 12.0       # میلیون — کف پایهٔ درآمد نفتی هر دوره
 DEFAULT_STRAIT_M = 14.0          # میلیون — هر تنگه برای مالکش
 DEFAULT_GROWTH_CAP = 5.0         # سقف ضریب ارتقا
 DEFAULT_RIG_BONUS_PCT = 8.0      # درصد افزایش درآمد نفت به ازای هر دکل نفتی
@@ -221,6 +222,8 @@ async def oil_income(user_id: int, growth: float = 1.0) -> dict:
     """
     unit = await _num_setting("income_oil_unit_m", DEFAULT_OIL_UNIT_M)
     bonus_pct = await _num_setting("oil_rig_bonus_percent", DEFAULT_RIG_BONUS_PCT)
+    floor_m = await _num_setting("income_oil_floor_m", DEFAULT_OIL_FLOOR_M)
+    level_bonus = await _num_setting("oil_level_income_bonus", 0.12)
     row = await db.fetchone(
         "SELECT c.oil_income_base FROM countries c JOIN users u ON u.country_id=c.id "
         "WHERE u.id=?", (user_id,))
@@ -230,12 +233,16 @@ async def oil_income(user_id: int, growth: float = 1.0) -> dict:
     rigs = counts["rigs"]
     rig_mult = 1.0 + rigs * (bonus_pct / 100)
 
-    level_mult = 1.0 + max(0, counts["oil_level"] - 1) * 0.15
+    # 🛠 هر سطح تجهیزات استخراج، درآمد نفتی را هم بالاتر می‌برد
+    level_mult = 1.0 + max(0, counts["oil_level"] - 1) * level_bonus
 
-    amount = int(base_m * unit * 1_000_000 * rig_mult * level_mult * growth)
-    return {"amount": amount, "base_m": base_m, "rigs": rigs,
-            "rig_mult": round(rig_mult, 2), "level_mult": round(level_mult, 2),
-            "bonus_pct": bonus_pct}
+    # پایهٔ هر کشور دست‌کم `income_oil_floor_m` میلیون است تا درآمد نفتی همیشه
+    # در بازهٔ میلیونی بماند (نه چند صد هزار).
+    eff_base = max(base_m * unit, floor_m)
+    amount = int(eff_base * 1_000_000 * rig_mult * level_mult * growth)
+    return {"amount": amount, "base_m": base_m, "eff_base_m": round(eff_base, 2),
+            "rigs": rigs, "rig_mult": round(rig_mult, 2),
+            "level_mult": round(level_mult, 2), "bonus_pct": bonus_pct}
 
 
 async def strait_income(user_id: int, growth: float = 1.0) -> dict:
@@ -279,8 +286,9 @@ async def income_breakdown_lines(user_id: int) -> list[str]:
     lines = [
         f"💵 <b>درآمد هر {src['minutes']} دقیقه: {fmt_money(src['total'])}</b>",
         f"  • 💰 مالیات مردم: <b>{fmt_money(src['tax']['amount'])}</b>",
-        f"  • 🛢 فروش نفت: <b>{fmt_money(oil['amount'])}</b>",
-        f"     └ {oil['rigs']} دکل نفتی → ×{oil['rig_mult']}",
+        f"  • 🛢 درآمد نفت: <b>{fmt_money(oil['amount'])}</b>",
+        f"     └ پایه {oil['eff_base_m']:g}M × {oil['rigs']} دکل (×{oil['rig_mult']}) "
+        f"× سطح تجهیزات (×{oil['level_mult']})",
         f"  • ⚓ عوارض تنگه‌ها: <b>{fmt_money(src['strait']['amount'])}</b> "
         f"({src['strait']['count']} تنگه)",
         f"  📈 ضریب کل ارتقا: <b>×{g['mult']}</b>"

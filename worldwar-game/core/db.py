@@ -974,6 +974,7 @@ DEFAULT_SETTINGS = {
     "income_tax_base_m": "10",        # پایهٔ مالیات هر دوره (میلیون)
     "income_tax_step_m": "8",         # به ازای هر واحد ضریب اقتصاد کشور (میلیون)
     "income_oil_unit_m": "1",         # ضریب oil_income_base → پول (میلیون)
+    "income_oil_floor_m": "12",       # کف پایهٔ درآمد نفتی هر دوره (میلیون)
     "income_strait_m": "14",          # عوارض هر تنگه برای مالک (میلیون)
     "income_growth_cap": "5",         # سقف ضریب ارتقا
     "oil_rig_bonus_percent": "8",     # درصد افزایش درآمد نفت به ازای هر دکل نفتی
