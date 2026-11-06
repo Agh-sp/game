@@ -142,7 +142,7 @@ async def admin_add_name(message: Message, state: FSMContext, admin: dict):
         (data["new_admin_id"], name, message.from_user.id))
     await log_action(message.from_user.id, "ادمین", f"افزودن {data['new_admin_id']} ({name})")
     await notify_user(data["new_admin_id"],
-                      f"🛡 تبریک! شما ادمین ربات «جنگ جهانی» شدید. ربات ادمین را استارت کنید.")
+                      f"🛡 تبریک! شما ادمین ربات «جنگ جهانی ۳» شدید. ربات ادمین را استارت کنید.")
     await message.answer(
         f"✅ ادمین <b>{name}</b> (<code>{data['new_admin_id']}</code>) اضافه شد.\n\n"
         "حالا از منوی 🛡 ادمین‌ها سطح دسترسی‌هایش را تعیین کنید.")

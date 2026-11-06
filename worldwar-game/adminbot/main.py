@@ -30,6 +30,8 @@ async def _on_startup(bot: Bot) -> None:
             BotCommand(command="receipts", description="🧾 بررسی فیش‌ها"),
             BotCommand(command="tickets", description="🎫 تیکت‌های پشتیبانی"),
             BotCommand(command="settings", description="⚙️ تنظیمات متغیرهای بازی"),
+            BotCommand(command="channels", description="📡 کانال و گپ رسمی بازی"),
+            BotCommand(command="testchannel", description="🧪 تست ارسال خبر به کانال"),
             BotCommand(command="cancel", description="❌ انصراف از عملیات"),
         ])
     except Exception as e:
@@ -54,9 +56,9 @@ def create_dispatcher() -> Dispatcher:
     dp.startup.register(_on_startup)
     from adminbot.handlers import (admins, broadcast, logs, panel, receipts,
                                    settings, tickets, users, media, seasons,
-                                   sections, prices, equipment_bulk, currency)
+                                   sections, prices, equipment_bulk, currency, channel)
     from adminbot import crud
-    for r in (panel, users, receipts, tickets, broadcast, admins, settings, logs,
+    for r in (panel, channel, users, receipts, tickets, broadcast, admins, settings, logs,
               media, seasons, sections, prices, equipment_bulk, currency, crud):
         dp.include_router(r.router)
     return dp

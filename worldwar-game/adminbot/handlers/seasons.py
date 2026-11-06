@@ -140,7 +140,7 @@ async def season_new_input(message: Message, state: FSMContext):
     await set_setting("season_name", name)
     await set_setting("season_mode", "worldwar")
     await log_action(message.from_user.id, "سیزن", f"ساخت {name} #{sid}")
-    await message.answer(f"✅ سیزن «{name}» ساخته و فعال شد (مود: جنگ جهانی).")
+    await message.answer(f"✅ سیزن «{name}» ساخته و فعال شد (مود: جنگ جهانی ۳).")
     payload = await _seasons_payload()
     await message.answer(payload["text"], reply_markup=payload["reply_markup"])
 

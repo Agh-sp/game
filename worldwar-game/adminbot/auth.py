@@ -59,44 +59,20 @@ class AdminGate(BaseMiddleware):
             )
             admin = await db.fetchone("SELECT * FROM admins WHERE id=?", (user.id,))
 
-        # اگر هیچ ادمینی در جدول نباشد، اولین استارت سوپرادمین می‌شود
+        # هیچ‌کس نمی‌تواند خودش را ادمین کند — فقط سوپرادمینِ ثبت‌شده در core/config.py
         if not admin:
-            row = await db.fetchone("SELECT COUNT(*) AS c FROM admins WHERE is_super=1")
-            super_count = row["c"] if row else 0
-            if super_count == 0:
-                await db.execute(
-                    "INSERT INTO admins(id, name, is_super, perms) VALUES(?, ?, 1, '[]')",
-                    (user.id, user.full_name or "سوپرادمین"),
-                )
-                admin = await db.fetchone("SELECT * FROM admins WHERE id=?", (user.id,))
-
-        # اگر هنوز ادمین نیست، امکان فعال‌سازی با دکمه برای مالک ربات
-        if not admin:
-            if call_obj and getattr(call_obj, "data", "") == "claim_admin_access":
-                await db.execute(
-                    "INSERT INTO admins(id, name, is_super, perms) VALUES(?, ?, 1, '[]') ON CONFLICT(id) DO UPDATE SET is_super=1",
-                    (user.id, user.full_name or "سوپرادمین"),
-                )
-                admin = await db.fetchone("SELECT * FROM admins WHERE id=?", (user.id,))
-                await call_obj.answer("✅ دسترسی سوپرادمین برای شما فعال شد! لطفا دوباره /start را ارسال کنید.", show_alert=True)
-            elif msg_obj:
-                from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-                claim_kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="👑 فعال‌سازی فوری دسترسی سوپرادمین", callback_data="claim_admin_access")]
-                ])
+            if call_obj:
+                await call_obj.answer(f"⛔️ این ربات فقط برای ادمین است (آیدی شما: {user.id})",
+                                      show_alert=True)
+                return
+            if msg_obj:
                 await msg_obj.answer(
-                    "⛔️ <b>شما هنوز ادمین ثبت نشده‌اید.</b>\n\n"
-                    f"🆔 آیدی عددی شما: <code>{user.id}</code>\n"
-                    f"نام کاربری: @{user.username or 'ندارد'}\n\n"
-                    "💡 برای دسترسی به پنل مدیریت، روی دکمه زیر بزنید یا این آیدی را در فیلد <b>SUPER_ADMIN_ID</b> وارد کنید:",
-                    reply_markup=claim_kb,
+                    "⛔️ <b>این ربات مدیریتی است.</b>\n\n"
+                    f"🆔 آیدی عددی شما: <code>{user.id}</code>\n\n"
+                    "برای بازی از ربات اصلی زیر استفاده کنید:\n"
+                    "🎮 @WorldWarWordbot"
                 )
-                return
-            elif call_obj:
-                await call_obj.answer(f"⛔️ شما ادمین نیستید (آیدی: {user.id})", show_alert=True)
-                return
-            else:
-                return
+            return
 
         perms = set(jloads(admin["perms"], []))
         if admin["is_super"]:

@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import json
 
-from core.config import DEFAULT_SUPER_ADMIN_IDS, SUPER_ADMIN_ID, SUPER_ADMIN_IDS
+from core.config import (DEFAULT_SUPER_ADMIN_IDS, LEGACY_ADMIN_IDS, STRICT_SINGLE_ADMIN,
+                         SUPER_ADMIN_ID, SUPER_ADMIN_IDS)
 from core.db import db
 
 # همهٔ دسترسی‌های ربات ادمین (۱۰۰٪) — مرجع واحد برای هر دو ربات
@@ -32,6 +33,16 @@ async def ensure_super_admins() -> list[int]:
             "ON CONFLICT(id) DO UPDATE SET is_super=1, perms=excluded.perms",
             (int(uid), perms),
         )
+    # آیدی‌های قدیمی که دیگر نباید ادمین باشند حذف می‌شوند
+    for legacy in LEGACY_ADMIN_IDS:
+        if int(legacy) not in {int(i) for i in ids}:
+            await db.execute("DELETE FROM admins WHERE id=?", (int(legacy),))
+    # حالت تک‌ادمین: هر ادمینِ دیگر (که در کانفیگ نیست) هم حذف می‌شود
+    if STRICT_SINGLE_ADMIN:
+        allowed = [int(i) for i in ids if i]
+        if allowed:
+            marks = ",".join("?" for _ in allowed)
+            await db.execute(f"DELETE FROM admins WHERE id NOT IN ({marks})", tuple(allowed))
     return ids
 
 

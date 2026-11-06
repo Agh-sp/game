@@ -354,6 +354,40 @@ async def _slow_loop(bot) -> None:
         await asyncio.sleep(60)
 
 
+async def _world_news_loop(bot) -> None:
+    """هر ۳ ساعت یک خبر «وضعیت جهان» در کانال می‌گذارد."""
+    await asyncio.sleep(120)
+    while True:
+        await world_news_task(bot)
+        await asyncio.sleep(3 * 60 * 60)
+
+
+async def world_news_task(bot) -> None:
+    """خبر دوره‌ای «وضعیت جهان» در کانال: قدرت‌ها، جنگ‌های فعال و کشورهای آزاد."""
+    try:
+        from core.economy import announce_news
+        wars = await db.fetchall("SELECT COUNT(*) c FROM wars WHERE status IN ('active','voting')")
+        active = int((wars[0]["c"] if wars else 0) or 0)
+        free = await db.fetchall(
+            "SELECT COUNT(*) c FROM countries WHERE (owner_id IS NULL OR owner_id=0) AND is_active=1")
+        free_count = int((free[0]["c"] if free else 0) or 0)
+        total = await db.fetchall("SELECT COUNT(*) c FROM users WHERE country_id IS NOT NULL AND banned=0")
+        players = int((total[0]["c"] if total else 0) or 0)
+        top = await db.fetchall(
+            "SELECT c.flag, c.name, COUNT(DISTINCT u.id) n FROM countries c "
+            "JOIN users u ON u.country_id=c.id AND u.banned=0 "
+            "GROUP BY c.id ORDER BY n DESC LIMIT 3")
+        lines = [f"👥 بازیکنان فعال: <b>{players}</b>",
+                 f"⚔️ جنگ‌های جاری: <b>{active}</b>",
+                 f"🏳 کشورهای آزاد: <b>{free_count}</b>"]
+        if top:
+            lines.append("🏆 قدرت‌های برتر: " + " • ".join(
+                f"{r['flag']} {r['name']}" for r in top))
+        await announce_news(bot, "📰 وضعیت امروز جهان", lines, section="general")
+    except Exception:
+        log.exception("world news failed")
+
+
 def start_game_scheduler(bot) -> list[asyncio.Task]:
     """راه‌اندازی زمان‌بند ربات اصلی (یک‌بار)."""
     global _tasks
@@ -365,6 +399,7 @@ def start_game_scheduler(bot) -> list[asyncio.Task]:
         asyncio.create_task(_on_start()),
         asyncio.create_task(_income_loop(bot)),
         asyncio.create_task(_slow_loop(bot)),
+        asyncio.create_task(_world_news_loop(bot)),
         asyncio.create_task(firebase_heartbeat_task()),
         asyncio.create_task(firebase_flush_task()),
         asyncio.create_task(firebase_snapshot_task()),

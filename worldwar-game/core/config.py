@@ -11,6 +11,16 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+# ─── نام رسمی بازی ───
+GAME_NAME = "جنگ جهانی ۳"
+GAME_SHORT_NAME = "جنگ جهانی ۳"
+
+# ─── کانال و گروه رسمی بازی ───
+# کانال‌های عضویت اجباری (گپ گفتگو + کانال خبری)
+OFFICIAL_GROUP = "@WordWarWord"          # گپ/ابرگروه رسمی برای عضویت بازیکنان
+OFFICIAL_CHANNEL = "@Jangjhani313"       # کانال خبری (اخبار جنگ، پیروزی، بیانیه، رای‌گیری)
+OFFICIAL_CHANNELS: tuple[str, ...] = (OFFICIAL_GROUP, OFFICIAL_CHANNEL)
+
 # ─── اطلاعات ربات‌ها (ثابت — داخل کد) ───
 # توکن ربات اصلی بازی (ربات بازیکن‌ها)
 DEFAULT_GAME_BOT_TOKEN = "9201202722:AAGuSaJQw16F_ugrKXUidttYfMqI9Cz3SVE"
@@ -44,7 +54,12 @@ ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN", "").strip() or DEFAULT_ADMIN_BOT_
 
 # ── ادمین‌ها ──
 # سوپرادمین‌های ثابت بازی (همیشه دسترسی کامل دارند، حتی بدون تنظیم .env)
+# تنها ادمین بازی — هیچ آیدی دیگری به‌صورت پیش‌فرض دسترسی ندارد
 DEFAULT_SUPER_ADMIN_IDS: tuple[int, ...] = (DEFAULT_ADMIN_ID,)
+# آیدی‌های قدیمی که در دیتابیس دسترسی ادمین داشتند و باید حذف شوند
+LEGACY_ADMIN_IDS: tuple[int, ...] = (8358901937,)
+# اگر True باشد هیچ‌کس نمی‌تواند با دکمهٔ «فعال‌سازی» خودش را ادمین کند
+STRICT_SINGLE_ADMIN = True
 
 
 def _parse_ids(raw: str) -> list[int]:
