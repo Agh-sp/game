@@ -330,21 +330,18 @@ async def buy_with_cash(call: CallbackQuery, state: FSMContext):
     if not c or c["owner_id"]:
         await call.answer("❌ این کشور پیش‌تر توسط بازیکن دیگری انتخاب شده است!", show_alert=True)
         return await country_mode_select(call)
-    card = await get_setting("c2c_card", "—")
-    holder = await get_setting("c2c_holder", "—")
-    await state.set_state(CashFSM.photo)
-    await state.update_data(kind="country", country_id=cid)
-    await call.message.edit_text(
-        f"💳 <b>خرید {c['flag']} {c['name']} با پول واقعی</b>\n\n"
-        f"💰 مبلغ قابل پرداخت: <b>{fmt(c['toman_price'])} تومان</b>\n"
-        f"💳 شماره کارت: <code>{card}</code>\n"
-        f"👤 به نام: {holder}\n\n"
-        "مبلغ را کارت به کارت کنید و <b>عکس فیش</b> را همین‌جا ارسال کنید.\n"
-        "پس از تأیید ادمین، حکومت و دین تعیین شده و کشور به شما واگذار می‌شود.\n\n"
-        "برای بازگشت به لیست کشورها دکمه زیر را بزنید:",
-        reply_markup=kb([[("🔴 انصراف و بازگشت به انتخاب کشور", "g|cancel")]]),
-    )
+    from core import config as cfg
+    support = (await get_setting("sales_support", "") or cfg.SALES_SUPPORT).strip()
+    handle = support if support.startswith("@") else f"@{support}"
+    link = f"https://t.me/{handle.lstrip('@')}"
     await call.answer()
+    await call.message.edit_text(
+        f"👑 <b>خرید {c['flag']} {c['name']}</b>\n\n"
+        f"💰 مبلغ: <b>{fmt(c['toman_price'])} تومان</b>\n\n"
+        f"🛒 برای خرید به {handle} پیام بدید:\n"
+        f'<a href="{link}">{handle}</a>',
+        reply_markup=kb([[("🔴 بازگشت به انتخاب کشور", "g|cancel")]]),
+    )
 
 
 @router.callback_query(F.data == "g|cancel")

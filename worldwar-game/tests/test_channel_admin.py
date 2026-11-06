@@ -114,6 +114,32 @@ async def main():
     H.check(any("agfafagjganigagbot" in (u or "") for u in admin_urls), "دکمهٔ پنل ادمین به ربات درست لینک است")
     H.check(not any("ADmminFIREWOrldBOT" in (u or "") for u in admin_urls), "لینک قدیمی پنل ادمین حذف شده")
 
+    print("\n== TEST 6.8: فروشگاه سکه شاهی — فقط قیمت + آیدی پشتیبانی ==")
+    from gamebot.handlers.misc import coin_shop_text, sales_support
+    await db.execute("DELETE FROM coin_packages")
+    for coins, price, disc in [(10, 10000, 0), (50, 47500, 5), (100, 90000, 10), (500, 425000, 15)]:
+        await db.execute("INSERT INTO coin_packages(coins, price_toman, discount_percent, is_active) "
+                         "VALUES(?,?,?,1)", (coins, price, disc))
+    shop = await coin_shop_text(None)
+    H.check(await sales_support() == "@MiddleEastDefendSupport", "آیدی پشتیبانی فروش")
+    H.check("https://t.me/MiddleEastDefendSupport" in shop, "لینک پشتیبانی در متن")
+    H.check("6037-9975-0764-0028" not in shop, "شماره کارت در متن نیست")
+    H.check("کارت به کارت" not in shop, "هیچ اشاره‌ای به کارت به کارت نیست")
+    H.check("محمد طاها" not in shop, "نام صاحب کارت حذف شد")
+    H.check("10,000 تومان" in shop and "47,500 تومان" in shop
+            and "90,000 تومان" in shop and "425,000 تومان" in shop, "هر چهار قیمت درست است")
+    H.check("تخفیف 5٪" in shop and "تخفیف 10٪" in shop and "تخفیف 15٪" in shop, "درصد تخفیف‌ها درست است")
+    # دکمه‌های حذف‌شده باید به فروشگاه هدایت شوند و هیچ کارتی نشان ندهند
+    H.SENT.clear()
+    for cb in ("g|coinbuy", "g|coinpkg", "g|coinconv", "g|coinhist"):
+        await dp.feed_update(bot, H.cb_update(700001, cb))
+    redirected = [t for _n, _c, t, _p in H.SENT if t]
+    H.check(any("@MiddleEastDefendSupport" in (t or "") for t in redirected),
+            "دکمه‌های خرید/تبدیل/فیش به فروشگاه با آیدی پشتیبانی می‌روند")
+    H.check(not any("6037" in (t or "") or "کارت به کارت" in (t or "") for t in redirected),
+            "هیچ‌کدام شماره کارت نشان نمی‌دهند")
+    H.check(await get_setting("c2c_card", "") == "", "شماره کارت در تنظیمات خالی است")
+
     print("\n== TEST 7: دستور /testchannel در ربات ادمین ==")
     from adminbot.main import create_dispatcher as admin_dp_factory
     adp = admin_dp_factory()

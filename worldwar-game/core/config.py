@@ -11,6 +11,10 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+# ─── پشتیبانی فروش سکه شاهی (به‌جای کارت به کارت) ───
+SALES_SUPPORT = "@MiddleEastDefendSupport"
+SALES_SUPPORT_URL = "https://t.me/MiddleEastDefendSupport"
+
 # ─── نام‌کاربری ربات‌ها (برای ساخت لینک در دکمه‌ها) ───
 ADMIN_BOT_USERNAME = "agfafagjganigagbot"
 GAME_BOT_USERNAME = "WorldWarWordbot"

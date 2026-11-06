@@ -782,6 +782,13 @@ async def init_db() -> None:
                                      (texts.GUIDE,))
                 else:
                     await db.execute("UPDATE settings SET value='' WHERE key='start_text'")
+        # کارت به کارت بازنشسته شد: شماره کارت/نام صاحب کارت پاک می‌شود تا فروش
+        # فقط از طریق آیدی پشتیبانی انجام شود (هر مقداری که ادمین بعداً بگذارد حفظ می‌شود).
+        for key in ("c2c_card", "c2c_holder"):
+            row = await db.fetchone("SELECT value FROM settings WHERE key=?", (key,))
+            if row and (row["value"] or "").strip():
+                await db.execute("UPDATE settings SET value='' WHERE key=?", (key,))
+
         row = await db.fetchone("SELECT value FROM settings WHERE key='season_name'")
         if row and row["value"] and _is_legacy(row["value"]):
             await db.execute("UPDATE settings SET value=? WHERE key='season_name'",
@@ -868,8 +875,9 @@ async def sync_country_owners() -> None:
 DEFAULT_SETTINGS = {
     "coin_price_toman": "1000",           # قیمت هر سکه شاهی به تومان
     "coins_to_money_rate": "5000000",     # نرخ تبدیل سکه شاهی به پول پایه
-    "c2c_card": "6037-0000-0000-0000",    # شماره کارت به کارت
-    "c2c_holder": "نام صاحب کارت",
+    "sales_support": "@MiddleEastDefendSupport",  # آیدی پشتیبانی فروش (جای کارت به کارت)
+    "c2c_card": "",    # خالی = نمایش داده نمی‌شود (فروش از طریق پشتیبانی انجام می‌شود)
+    "c2c_holder": "",
     "join_channels": '["@WordWarWord", "@Jangjhani313"]',      # کانال‌های عضویت اجباری (گپ + کانال خبری)
     "announcement_channel": "@Jangjhani313",                   # کانال اعلانات/اخبار بازی
     "game_group": "@WordWarWord",                              # گپ/ابرگروه رسمی بازی
