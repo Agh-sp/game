@@ -1553,6 +1553,52 @@ async def straits_menu(call: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("g|stc|"))
+async def strait_attack_confirm(call: CallbackQuery):
+    """صفحهٔ تأیید حملهٔ فرسایشی — همیشه اجازه می‌دهد، فقط نتیجه را شفاف می‌گوید."""
+    from core.straits import attack_outlook
+    sid = int(call.data.split("|")[2])
+    s = await db.fetchone("SELECT * FROM straits WHERE id=? AND is_active=1", (sid,))
+    if not s:
+        return await call.answer("تنگه یافت نشد", show_alert=True)
+    look = await attack_outlook(call.from_user.id, s)
+    oc = look["owner_country"]
+    owner_label = (f"{oc['flag']} <b>{oc['name']}</b>" if oc else "بدون مالک")
+
+    if not s["owner_id"]:
+        # تنگهٔ آزاد: استقرار بدون درگیری
+        await call.answer()
+        msg = await capture_strait(call.bot, call.from_user.id, sid)
+        await call.message.answer(msg, reply_markup=kb([back_row("g|strait")]))
+        return await straits_menu(call)
+
+    if look["can_capture"]:
+        verdict = (f"✅ <b>این حمله شانس تصرف دارد: {look['win_chance']}٪</b>")
+    else:
+        verdict = ("⚔️ <b>این حمله فرسایشی است — تصرف در همین حمله ممکن نیست</b>\n"
+                   f"با حدود <b>{look['needed_rounds'] or '—'}</b> حملهٔ پیوسته، "
+                   "دفاع مدافع شکسته می‌شود.")
+    text = (
+        f"⚓ <b>حمله به تنگهٔ {s['emoji']} {s['name']}</b>\n\n"
+        f"🛡 مالک فعلی: {owner_label}\n\n"
+        f"🚢 قدرت دریایی شما: <b>{fmt(look['my_naval'])}</b>\n"
+        f"   (با استراتژی {look['strategy']['emoji']} {look['strategy']['name']}: "
+        f"<b>{fmt(look['atk_power'])}</b>)\n"
+        f"🛡 توان دفاع دریایی مدافع: <b>{fmt(look['owner_def'])}</b>\n"
+        f"🎯 قدرت لازم برای تصرف: <b>{fmt(look['need'])}</b>\n\n"
+        f"{verdict}\n\n"
+        f"♻️ <b>نبرد فرسایشی است:</b> هر حمله حداقل "
+        f"<b>{look['attrition']}٪</b> از ناوگان مدافع را از بین می‌برد، "
+        "حتی اگر این بار تنگه را نگیرید.\n\n"
+        "آیا حمله می‌کنید؟"
+    )
+    await call.answer()
+    await call.message.edit_text(text, reply_markup=kb([
+        [("⚔️ بله، حمله کن", f"g|stgo|{sid}")],
+        back_row("g|strait", "🔴 انصراف"),
+    ]))
+
+
+@router.callback_query(F.data.startswith("g|stgo|"))
 async def strait_capture(call: CallbackQuery):
     sid = int(call.data.split("|")[2])
     msg = await capture_strait(call.bot, call.from_user.id, sid)

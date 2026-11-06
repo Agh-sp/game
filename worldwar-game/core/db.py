@@ -1021,7 +1021,9 @@ DEFAULT_SETTINGS = {
     "oil_sale_need_barrels": "5000",         # بشکه مرجع برای فروش کامل
     # ── تنگه‌ها ──
     "strait_min_naval": "500",              # حداقل قدرت دریایی برای تصاحب تنگه آزاد
-    "strait_capture_ratio": "1.3",           # حداقل نسبت توان دریایی برای حمله به تنگه دارای مالک
+    "strait_capture_ratio": "1.3",           # نسبت توان لازم برای تصرف در یک حمله
+    "strait_attrition_percent": "18",        # درصد فرسایش ناوگان مدافع در هر حمله
+    "strait_attrition_min_attacker": "5",    # حداقل درصد تلفات مهاجم در هر حمله
     "strait_toll_percent": "1.5",            # عوارض درآمد غیرمالیاتی
     # ── ارز ──
     "main_currency": "",                     # نام ارز اصلی فعلی بازی

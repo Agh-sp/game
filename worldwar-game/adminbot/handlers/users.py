@@ -190,6 +190,7 @@ def user_card_kb(uid: int, banned: int) -> list:
         [("🗑 برداشتن کشورش", f"a|ucountry|{uid}")],
         [("🧹 حذف پژوهش‌هایش", f"a|ures|{uid}"), ("🧹 حذف تجهیزاتش", f"a|ueq|{uid}")],
         [("♻️ ریست کامل", f"a|ureset|{uid}")],
+        [("🏳♻️ ریست کشور و انتخاب کشور تازه", f"a|rcty|{uid}")],
         [("✏️ ویرایش خام ردیف", cd("usr", "r", uid))],
         [("✉️ پیام خصوصی", f"a|umsg|{uid}")],
         [("🚫 بن" if not banned else "✅ لغو بن", f"a|uban|{uid}")],

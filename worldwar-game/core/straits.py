@@ -82,19 +82,60 @@ async def capture_requirements(user_id: int, strait: dict) -> tuple[bool, str]:
         return True, ""
     if strait["owner_id"] == user_id:
         return False, "شما مالک این تنگه هستید."
-    owner_country = await get_country(strait["owner_id"])
-    owner_def = await naval_defense(strait["owner_id"])
+    # ⚔️ حمله هرگز بلاک نمی‌شود: نبرد «فرسایشی» است و هر حمله بخشی از
+    # ناوگان مدافع را از بین می‌برد، حتی اگر این بار تنگه تصرف نشود.
+    return True, ""
+
+
+async def attack_outlook(user_id: int, strait: dict) -> dict:
+    """پیش‌بینی حملهٔ فرسایشی برای نمایش به بازیکن (هیچ‌چیز را تغییر نمی‌دهد).
+
+    خروجی:
+        my_naval     قدرت دریایی مهاجم
+        owner_def    توان دفاع دریایی مدافع
+        need         قدرت لازم برای تصرف در همین حمله
+        win_chance   درصد شانس تصرف در این حمله
+        can_capture  آیا این حمله شانس تصرف دارد؟
+        attrition    درصدی از ناوگان مدافع که در هر حمله فرسوده می‌شود
+        needed_rounds  چند حملهٔ مشابه لازم است تا مدافع فرسوده شود
+        owner_country
+    """
+    from core import combat
+
+    my_naval = await naval_power(user_id)
+    owner_id = strait["owner_id"]
+    owner_def = await naval_defense(owner_id) if owner_id else 0
     ratio = float(await get_setting("strait_capture_ratio", "1.3"))
     need = int(owner_def * ratio)
-    if my < need:
-        return False, (f"❌ ناوگان شما برای شکستن دفاع دریایی "
-                       f"{owner_country['flag'] if owner_country else ''} "
-                       f"{owner_country['name'] if owner_country else 'مالک'} کافی نیست.\n"
-                       f"🛡 توان دفاع دریایی او: <b>{fmt(owner_def)}</b> "
-                       f"(حداقل لازم برای حمله: {fmt(need)})\n"
-                       f"🚢 قدرت دریایی شما: <b>{fmt(my)}</b>\n"
-                       "با خرید ناو و زیردریایی بیشتر (🎖 پادگان) یا صبر برای فرسایش ناوگان دشمن، دوباره تلاش کنید.")
-    return True, ""
+    comp = await fleet_composition(user_id)
+    strat = combat.pick_strategy("sea", comp, defender_has_navy=await _def_has_navy(owner_id))
+    atk_power = my_naval * strat["atk"]
+    def_power = owner_def * strat["def"]
+    chance = combat.battle_chance(atk_power, def_power) if def_power > 0 else 1.0
+    attrition = float(await get_setting("strait_attrition_percent", "18")) / 100
+    owner_country = await get_country(owner_id) if owner_id else None
+
+    # چند حمله لازم است تا دفاع مدافع به سطحی برسد که قابل شکستن شود
+    rounds = 0
+    remaining = owner_def
+    while remaining > 0 and atk_power > 0 and rounds < 30:
+        if atk_power >= remaining * ratio:
+            break
+        remaining = int(remaining * (1 - attrition))
+        rounds += 1
+    return {
+        "my_naval": my_naval, "owner_def": owner_def, "need": need,
+        "win_chance": round(chance * 100, 1), "can_capture": atk_power >= need,
+        "attrition": round(attrition * 100, 1), "needed_rounds": rounds,
+        "owner_country": owner_country, "strategy": strat,
+        "atk_power": int(atk_power), "def_power": int(def_power),
+    }
+
+
+async def _def_has_navy(owner_id: int | None) -> bool:
+    if not owner_id:
+        return False
+    return await naval_power(owner_id) > 0
 
 
 async def capture_strait(bot, user_id: int, strait_id: int) -> str:
@@ -151,6 +192,13 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
     won = random.random() < chance
     atk_ratio, def_ratio = combat.loss_ratios(chance, strat)
 
+    # ⚔️ فرسایش تضمینی: حتی اگر حمله دفع شود، ناوگان مدافع آسیب می‌بیند.
+    # هر حمله دست‌کم `strait_attrition_percent` درصد از ناوگانش را از دست می‌دهد.
+    attrition = float(await get_setting("strait_attrition_percent", "18")) / 100
+    min_atk_loss = float(await get_setting("strait_attrition_min_attacker", "5")) / 100
+    def_ratio = max(def_ratio, attrition)
+    atk_ratio = max(atk_ratio, min_atk_loss)
+
     # تلفات واقعی هر دو طرف (کسر از ناوگان و سربازان)
     atk_losses, atk_units = await combat.apply_unit_losses(user_id, atk_ratio, ("sea",))
     def_losses, def_units = await combat.apply_losses(old_owner, def_rows, def_ratio, "equipment")
@@ -164,7 +212,9 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
         def_losses += s_def
         def_units += s_def_u
 
-    extra = []
+    extra = [
+        f"♻️ <b>نبرد فرسایشی:</b> ناوگان مدافع {round(attrition * 100)}٪ آسیب دید."
+    ]
     if won:
         await db.execute("UPDATE straits SET owner_id=?, captured_at=? WHERE id=?",
                          (user_id, iso(), strait_id))
@@ -201,9 +251,15 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
                 f"🧠 استراتژی پیروز: {strat['emoji']} {strat['name']}\n"
                 "💰 ۱.۵٪ عوارض ترانزیت به خزانه شما واریز می‌شود.")
     else:
+        old_def = def_naval + def_coast
+        new_def = await naval_defense(old_owner) if old_owner else 0
         head = (f"❌ <b>حمله به {s['name']} دفع شد!</b>\n"
                 f"🧠 استراتژی: {strat['emoji']} {strat['name']} — ناوگان مدافع مقاومت کرد.\n"
-                "مالکیت تنگه تغییر نکرد.")
+                "مالکیت تنگه تغییر نکرد.\n"
+                f"♻️ <b>نبرد فرسایشی — اما حمله بی‌اثر نبود:</b> دفاع مدافع از "
+                f"<b>{fmt(old_def)}</b> به <b>{fmt(new_def)}</b> کاهش یافت "
+                f"(−{fmt(max(0, old_def - new_def))}).\n"
+                "🔁 با حمله‌های پشت‌سرهم می‌توانید ناوگان او را فرسوده و بار بعد تصرف کنید.")
     if atk_losses:
         head += f"\n💥 تلفات ناوگان شما ({round(atk_ratio * 100)}%): " + " ، ".join(atk_losses[:4])
     else:
@@ -275,6 +331,8 @@ async def straits_menu_text(user_id: int) -> tuple[str, list]:
     lines.append("\n⚔️ <b>تسخیر تنگه = نبرد دریایی واقعی:</b> توان ناوگان شما با ناوگان + پدافند ساحلی مالک "
                  "سنجیده می‌شود، نتیجه بر اساس نسبت قدرت تعیین می‌گردد و <b>هر دو طرف</b> تلفات واقعی "
                  "می‌دهند (کسر از انبار). گزارش استراتژی حمله و خسارات دو طرف در کانال اعلام می‌شود.")
+    lines.append("♻️ <b>حمله همیشه ممکن است:</b> اگر ناوگانتان از مدافع ضعیف‌تر باشد، نبرد "
+                 "<b>فرسایشی</b> می‌شود — با هر حمله بخشی از ناوگان مدافع از بین می‌رود تا دفاعش بشکند.")
     lines.append("⚠️ کشورهای بدون مرز دریایی نه عوارض می‌پردازند و نه درآمد تنگه دارند.")
     return "\n".join(lines), buttons
 
