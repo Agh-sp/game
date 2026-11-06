@@ -26,14 +26,20 @@ _tasks: list[asyncio.Task] = []
 
 
 async def income_tick(bot) -> None:
-    """پرداخت خودکار مالیات/درآمد هر کشور + کسر یارانه + عوارض تنگه + استخراج نفت + اعلان به بازیکن."""
+    """پرداخت خودکار درآمد دوره‌ای از سه منبع: مالیات، نفت، عوارض تنگه.
+
+    همهٔ مبالغ میلیونی هستند و با ضریب ارتقای بازیکن رشد می‌کنند
+    (core/income.py). برخلاف گذشته نفت و تنگه بدون هیچ شرطی پرداخت می‌شوند.
+    """
     if await get_setting("bot_off", "0") == "1":
         return
-    minutes = max(5, int(float(await get_setting("income_interval_minutes", "30"))))
-    share = minutes / (24 * 60)
+    from core import income as inc
+
+    minutes = await inc.get_minutes()
     users = await db.fetchall(
         "SELECT u.id, u.money, s.satisfaction, s.tax_rate, s.subsidy_daily FROM users u "
-        "JOIN states s ON s.user_id=u.id WHERE u.country_id IS NOT NULL AND u.banned=0")
+        "LEFT JOIN states s ON s.user_id=u.id "
+        "WHERE u.country_id IS NOT NULL AND u.banned=0")
     total_paid = 0
     for u in users:
         uid = u["id"]
@@ -41,78 +47,88 @@ async def income_tick(bot) -> None:
             await satisfaction_recompute(uid)
         except Exception:
             pass
-        info = await income_breakdown(uid)
-        daily = info["daily"]
-        tax = info["tax_rate"]
-        non_tax_daily = info["non_tax"]
-        income_slice = int(daily * share)
-        non_tax_slice = int(non_tax_daily * share)
-        subsidy_slice = int((u["subsidy_daily"] or 0) * share)
-        # عوارض تنگه‌ها: ۱.۵٪ درآمد غیرمالیاتی به مالک تنگه
-        tolls = await toll_payers_slice(uid, non_tax_slice)
-        toll_total = sum(amount for _owner, amount in tolls)
-        for owner, amount in tolls:
-            if amount > 0:
-                await db.execute("UPDATE users SET money=money+? WHERE id=?", (amount, owner))
 
-        # جریمه مسدودی تنگه‌ها (کاهش ۱۰٪ درآمد به ازای هر تنگه مسدود شده علیه این کشور)
+        growth = await inc.growth_multiplier(uid)
+        mult = growth["mult"]
+        tax = await inc.tax_income(uid, mult)
+        oil = await inc.oil_income(uid, mult)
+        strait = await inc.strait_income(uid, mult)
+        res = await inc.resource_income(uid, mult)
+
+        tax_amt = int(tax["amount"])
+        oil_amt = int(oil["amount"])
+        strait_amt = int(strait["amount"])
+        res_amt = int(res["amount"])
+        subsidy_slice = int((u["subsidy_daily"] or 0) * minutes / (24 * 60))
+
+        # جریمهٔ مسدودی تنگه‌ها: ۱۰٪ کاهش درآمد به ازای هر تنگهٔ مسدود علیه این کشور
         blockade_row = await db.fetchone(
             "SELECT COUNT(*) AS c FROM strait_blockades WHERE target_user_id=?", (uid,))
-        blockade_count = blockade_row["c"] if blockade_row else 0
+        blockade_count = int((blockade_row or {}).get("c") or 0)
         blockade_loss = 0
         if blockade_count > 0:
-            blockade_pct = min(0.9, blockade_count * 0.10)
-            blockade_loss = int(income_slice * blockade_pct)
-            income_slice -= blockade_loss
+            pct = min(0.9, blockade_count * 0.10)
+            blockade_loss = int((tax_amt + oil_amt + strait_amt + res_amt) * pct)
 
-        # استخراج نفت خودکار
+        # استخراج نفت (برای انبار و بشکه‌ها — مستقل از درآمد پرداختی)
         from core import oil as oil_mod
         try:
             extracted = await oil_mod.extraction_tick(uid)
         except Exception:
             extracted = 0
+
         # مازاد منابع → انبار
         res_txt = []
         country = await get_country(uid)
         if country:
-            state = await get_state(uid)
+            state = await get_state(uid) or {}
             for sector, col in (("power", "energy"), ("water", "water"), ("gas", "gas")):
-                cap = await sector_capacity(uid, sector)
-                cons = consumption(country["population"] or 1, state.get(f"blackout_{sector}") or 0)
-                surplus = max(0, cap - cons)
-                if surplus > 0:
-                    await db.execute(f"UPDATE states SET {col}={col}+? WHERE user_id=?", (surplus, uid))
-                    res_txt.append(sector)
+                try:
+                    cap = await sector_capacity(uid, sector)
+                    cons = consumption(country["population"] or 1,
+                                       state.get(f"blackout_{sector}") or 0)
+                    surplus = max(0, cap - cons)
+                    if surplus > 0:
+                        await db.execute(
+                            f"UPDATE states SET {col}={col}+? WHERE user_id=?",
+                            (surplus, uid))
+                        res_txt.append(sector)
+                except Exception:
+                    pass
         # بازیابی تدریجی دیپلماسی به سمت ۵۰
         await db.execute(
             "UPDATE states SET diplomacy=CASE WHEN diplomacy<50 THEN MIN(50,diplomacy+0.5) "
-            "WHEN diplomacy>50 THEN MAX(50,diplomacy-0.5) ELSE diplomacy END WHERE user_id=?", (uid,))
-        net = income_slice - subsidy_slice - toll_total
+            "WHEN diplomacy>50 THEN MAX(50,diplomacy-0.5) ELSE diplomacy END WHERE user_id=?",
+            (uid,))
+
+        net = tax_amt + oil_amt + strait_amt + res_amt - subsidy_slice - blockade_loss
         if net:
             await db.execute("UPDATE users SET money=money+? WHERE id=?", (net, uid))
         await db.execute("UPDATE states SET last_income=? WHERE user_id=?", (iso(), uid))
         total_paid += max(0, net)
-        # اعلان به بازیکن
+
         c = country or {}
-        blockade_txt = (f"🚫 جریمه انسداد تنگه‌ها ({blockade_count} تنگه مسدود): <b>-{fmt_money(blockade_loss)}</b> (۱۰٪ به ازای هر تنگه)\n" if blockade_loss else "")
         msg = (
-            f"💰 <b>درآمد دوره‌ای ({minutes} دقیقه)</b>\n\n"
-            f"{blockade_txt}"
-            f"{c.get('flag', '')} {c.get('name', '')}\n"
-            f"👥 جمعیت: <b>{fmt(info['population'])}</b> نفر | 🙂 رضایت: <b>{info['satisfaction']}%</b>"
-            f" | 💰 نرخ مالیات: <b>{round(info['tax_rate'] * 100, 1)}%</b>\n"
-            f"💵 درآمد مالیات این دوره: <b>{fmt_money(income_slice)}</b>"
-            f" (روزانه <b>{fmt_money(daily)}</b>)\n"
+            f"💵 <b>درآمد {minutes} دقیقه‌ای شما</b>\n\n"
+            f"{c.get('flag', '')} <b>{c.get('name', '')}</b>\n"
+            f"📈 ضریب ارتقا: <b>×{mult}</b>\n\n"
+            f"💰 مالیات مردم: <b>{fmt_money(tax_amt)}</b>\n"
+            f"🛢 فروش نفت: <b>{fmt_money(oil_amt)}</b>"
+            f" <i>({oil['rigs']} دکل، ×{oil['rig_mult']})</i>\n"
+            f"⚓ عوارض تنگه‌ها: <b>{fmt_money(strait_amt)}</b>\n"
+            f"♻️ فروش منابع ({res['sectors']} بخش): <b>{fmt_money(res_amt)}</b>\n"
         )
         if subsidy_slice:
-            msg += f"🎁 کسر یارانه: <b>{fmt_money(subsidy_slice)}</b>\n"
-        if toll_total:
-            msg += f"⚓ عوارض تنگه‌ها: <b>-{fmt_money(toll_total)}</b>\n"
+            msg += f"🎁 کسر یارانه: <b>-{fmt_money(subsidy_slice)}</b>\n"
+        if blockade_loss:
+            msg += (f"🚫 جریمهٔ انسداد تنگه ({blockade_count} تنگه): "
+                    f"<b>-{fmt_money(blockade_loss)}</b>\n")
         if extracted:
             msg += f"🛢 نفت استخراج‌شده: <b>{fmt(extracted)} بشکه</b>\n"
         if res_txt:
             names = {"power": "برق", "water": "آب", "gas": "گاز"}
-            msg += "🏭 مازاد به انبار رفت: " + "، ".join(names.get(r, r) for r in res_txt) + "\n"
+            msg += "🏭 مازاد به انبار رفت: " + "، ".join(
+                names.get(r, r) for r in res_txt) + "\n"
         msg += f"\n✅ خالص به خزانه: <b>{fmt_money(net)}</b>"
         try:
             from gamebot.common import kb
@@ -120,7 +136,8 @@ async def income_tick(bot) -> None:
         except Exception:
             pass
     if total_paid:
-        await log_event("income", f"پرداخت خودکار دوره‌ای: مجموع {fmt(total_paid)} پول به {len(users)} کشور")
+        await log_event("income", f"پرداخت خودکار دوره‌ای: مجموع {fmt(total_paid)} "
+                                  f"پول به {len(users)} کشور")
 
 
 # ─── رای‌گیری سیزن ───
@@ -305,12 +322,16 @@ async def daily_report_task(bot) -> None:
 
 
 async def _income_loop(bot) -> None:
+    """هر `income_interval_minutes` دقیقه (پیش‌فرض ۵) درآمد را پرداخت می‌کند."""
+    from core import income as inc
+
+    await asyncio.sleep(30)
     while True:
-        minutes = max(5, int(float(await get_setting("income_interval_minutes", "30"))))
         try:
             await income_tick(bot)
         except Exception:
             log.exception("income tick failed")
+        minutes = await inc.get_minutes()
         await asyncio.sleep(minutes * 60)
 
 
@@ -343,6 +364,12 @@ async def _slow_loop(bot) -> None:
                 log.info("🛢 درآمد نفت پرداخت شد: %s", paid)
         except Exception:
             log.exception("oil auto sell failed")
+        # ☢️ تکمیل مراحل غنی‌سازی
+        try:
+            from core.enrichment import settle_all
+            await settle_all(bot)
+        except Exception:
+            log.exception("enrichment settle failed")
         # بستن انقلاب‌هایی که مهلتشان تمام شده
         try:
             from core.politics import revolution_tick

@@ -292,6 +292,98 @@ CREATE TABLE IF NOT EXISTS un_ballots (
   PRIMARY KEY (vote_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS coin_sales (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  coins INTEGER DEFAULT 0,
+  rate INTEGER DEFAULT 0,
+  gain INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS provinces (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  country_id INTEGER NOT NULL,
+  idx INTEGER NOT NULL,
+  name TEXT DEFAULT '',
+  owner_id INTEGER,
+  captured_at TEXT,
+  UNIQUE(country_id, idx)
+);
+
+CREATE TABLE IF NOT EXISTS provinces_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  province_id INTEGER,
+  from_owner INTEGER,
+  to_owner INTEGER,
+  war_id INTEGER,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS alliances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT DEFAULT '',
+  leader_id INTEGER,
+  status TEXT DEFAULT 'active',
+  founded_at TEXT DEFAULT (datetime('now')),
+  dissolved_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS alliance_members (
+  alliance_id INTEGER,
+  user_id INTEGER,
+  role TEXT DEFAULT 'member',
+  joined_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY(alliance_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS alliance_invites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  alliance_id INTEGER,
+  inviter_id INTEGER,
+  invitee_id INTEGER,
+  status TEXT DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS enrichment (
+  user_id INTEGER PRIMARY KEY,
+  stage INTEGER DEFAULT 0,
+  started_at TEXT,
+  completes_at TEXT,
+  centrifuges INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS nuclear_sites (
+  user_id INTEGER PRIMARY KEY,
+  stage INTEGER DEFAULT 0,
+  kind TEXT DEFAULT '',
+  emoji TEXT DEFAULT '☢️',
+  hp INTEGER DEFAULT 100,
+  max_hp INTEGER DEFAULT 100,
+  centrifuges INTEGER DEFAULT 0,
+  active INTEGER DEFAULT 1,
+  destroyed_at TEXT,
+  last_attack_at TEXT,
+  leaked INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS nuclear_strikes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attacker_id INTEGER,
+  defender_id INTEGER,
+  success INTEGER DEFAULT 0,
+  damage INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS internet_infra (
+  user_id INTEGER PRIMARY KEY,
+  level INTEGER DEFAULT 0,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS wars (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   attacker_id INTEGER,
@@ -332,7 +424,9 @@ CREATE TABLE IF NOT EXISTS bases (
   host_id INTEGER,
   guest_id INTEGER,
   status TEXT DEFAULT 'pending',
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  kind TEXT DEFAULT 'land',
+  name TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -581,7 +675,8 @@ ALL_TABLES = [
     "season_votes", "season_ballots", "negotiations", "negotiation_members",
     "negotiation_msgs", "treaties", "treaty_confirms", "direct_trades", "straits",
     "strait_blockades", "rescue_campaigns", "rescue_donations", "oil_offers",
-    "currency_requests", "fb_queue",
+    "currency_requests", "fb_queue", "nuclear_sites", "nuclear_strikes",
+    "internet_infra",
 ]
 
 
@@ -594,11 +689,15 @@ async def _add_column(table: str, column: str, decl: str) -> None:
 
 
 MIGRATIONS = [
+    ("states", "last_attack_at", "TEXT"),
+    ("countries", "province_count", "INTEGER DEFAULT 5"),
+    ("countries", "collapsed", "INTEGER DEFAULT 0"),
     ("states", "oil_stock", "INTEGER DEFAULT 0"),
     ("states", "energy", "INTEGER DEFAULT 5000"),
     ("states", "water", "INTEGER DEFAULT 5000"),
     ("states", "gas", "INTEGER DEFAULT 5000"),
     ("states", "materials", "INTEGER DEFAULT 1000"),
+    ("states", "food", "INTEGER DEFAULT 0"),
     ("states", "diplomacy", "REAL DEFAULT 50"),
     ("countries", "oil_reserve", "INTEGER DEFAULT 0"),
     ("countries", "oil_richness", "REAL DEFAULT 0"),
@@ -616,6 +715,8 @@ MIGRATIONS = [
     ("countries", "leader_title", "TEXT DEFAULT 'رئیس‌جمهور'"),
     ("countries", "leader_since", "TEXT DEFAULT ''"),
     ("revolutions", "force_block_until", "TEXT"),
+    ("bases", "kind", "TEXT DEFAULT 'land'"),
+    ("bases", "name", "TEXT DEFAULT ''"),
 ]
 
 
@@ -820,6 +921,13 @@ async def init_db() -> None:
     # یکپارچه‌سازی مالکیت کشورها با کاربران (مالکیت دوگانه، مالک بی‌کاربر و ...)
     await sync_country_owners()
 
+    # 🗺 ساخت ۵ استان پایه برای هر کشور (idempotent)
+    try:
+        from core.provinces import ensure_provinces
+        await ensure_provinces()
+    except Exception:
+        pass
+
 
 async def sync_country_owners() -> None:
     """هم‌ترازکردن countries.owner_id با users.country_id.
@@ -873,6 +981,7 @@ async def sync_country_owners() -> None:
 
 
 DEFAULT_SETTINGS = {
+    "coin_sell_rate": "100000000",   # پول پایه‌ای که بابت فروش هر سکه به بازیکن داده می‌شود
     "coin_price_toman": "1000",           # قیمت هر سکه شاهی به تومان
     "coins_to_money_rate": "5000000",     # نرخ تبدیل سکه شاهی به پول پایه
     "sales_support": "@MiddleEastDefendSupport",  # آیدی پشتیبانی فروش (جای کارت به کارت)
@@ -896,7 +1005,47 @@ DEFAULT_SETTINGS = {
     "special_toman_multiplier": "100000",
     "guide_text": "",
     # ── درآمد خودکار ۳۰ دقیقه‌ای ──
-    "income_interval_minutes": "30",
+    "income_interval_minutes": "5",
+    # ─── موتور درآمد میلیونی (core/income.py) ───
+    "income_tax_base_m": "55",        # پایهٔ مالیات هر دوره (میلیون)
+    "income_tax_step_m": "25",        # به ازای هر واحد ضریب اقتصاد کشور (میلیون)
+    "income_oil_unit_m": "3",         # ضریب oil_income_base → پول (میلیون)
+    "income_oil_floor_m": "55",       # کف پایهٔ درآمد نفتی هر دوره (میلیون)
+    "income_strait_m": "45",          # عوارض هر تنگه برای مالک (میلیون)
+    "income_resource_m": "18",        # فروش مازاد هر بخش منابع (برق/آب/گاز/غذا) — میلیون
+    "income_floor_m": "110",          # کف تضمینی کل درآمد هر دوره (میلیون)
+    # ── ♻️ فروش دستی منابع (gamebot/handlers/resources.py) ──
+    "res_price_power": "60",          # پول هر واحد برق
+    "res_price_water": "40",          # پول هر واحد آب
+    "res_price_gas": "90",            # پول هر واحد گاز
+    "res_price_food": "120",          # پول هر واحد غذا
+    "res_price_oil": "25000",         # پول هر بشکه نفت
+    "res_price_materials": "9000",    # پول هر واحد مصالح
+    "sec_resource_sale": "1",         # بخش فروش منابع روشن/خاموش
+    "income_growth_cap": "8",         # سقف ضریب ارتقا
+    "oil_rig_bonus_percent": "12",    # درصد افزایش درآمد نفت به ازای هر دکل نفتی
+    # ─── نبرد و استان‌ها ───
+    "attack_cooldown_minutes": "3",   # فاصله بین دو حمله
+    "cyber_cooldown_minutes": "20",   # فاصله بین دو عملیات سایبری (قبلاً ۶ ساعت)
+    "naval_base_cost": "300000000",   # هزینهٔ ساخت پایگاه دریایی (اجارهٔ بندر)
+    "naval_base_sea_power": "1500",   # قدرت دریایی که هر پایگاه دریایی فراهم می‌کند
+    "capture_province_bonus": "15",   # شانس اضافه تصرف استان در حملهٔ تسخیر (درصد)
+    "conquest_loot_bonus": "20",      # درصد غارت بیشتر در حملهٔ تسخیر
+    # ── ☢️ تأسیسات هسته‌ای ──
+    "nuclear_leak_chance": "35",      # شانس نشت رادیواکتیو در تخریب کامل (درصد)
+    "nuclear_rebuild_cost": "120000000",  # هزینهٔ پایهٔ بازسازی تأسیسات
+    "nuclear_site_hp": "100",         # استحکام پایهٔ تأسیسات
+    # ── 🌐 رفاه اینترنت (core/internet.py) ──
+    "internet_max_level": "5",              # حداکثر سطح زیرساخت اینترنت
+    "internet_upgrade_cost": "80000000",    # هزینهٔ پایهٔ ارتقای یک سطح (پول)
+    "internet_materials_per_level": "250",  # مصالح لازم پایه برای هر ارتقا
+    "internet_growth_bonus": "5",           # درصد افزایش ضریب درآمد به ازای هر سطح
+    "internet_satisfaction_bonus": "2",     # امتیاز رضایت به ازای هر سطح
+    "province_defense_min_chance": "10",
+    "province_defense_max_chance": "70",
+    # ─── اتحاد ───
+    "alliance_defense_percent": "30",
+    "alliance_max_members": "8",
     # ── بخش‌ها (روشن/خاموش) 1=روشن ──
     "sec_negotiation": "1",
     "sec_direct_trade": "1",
@@ -934,7 +1083,9 @@ DEFAULT_SETTINGS = {
     "oil_sale_need_barrels": "5000",         # بشکه مرجع برای فروش کامل
     # ── تنگه‌ها ──
     "strait_min_naval": "500",              # حداقل قدرت دریایی برای تصاحب تنگه آزاد
-    "strait_capture_ratio": "1.3",           # حداقل نسبت توان دریایی برای حمله به تنگه دارای مالک
+    "strait_capture_ratio": "1.3",           # نسبت توان لازم برای تصرف در یک حمله
+    "strait_attrition_percent": "18",        # درصد فرسایش ناوگان مدافع در هر حمله
+    "strait_attrition_min_attacker": "5",    # حداقل درصد تلفات مهاجم در هر حمله
     "strait_toll_percent": "1.5",            # عوارض درآمد غیرمالیاتی
     # ── ارز ──
     "main_currency": "",                     # نام ارز اصلی فعلی بازی

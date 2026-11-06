@@ -525,6 +525,7 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
     sent_count = 0
     human_total = 0
     human_delivered = 0
+    undelivered: list[int] = []
     npc_targets = []
     for m in members:
         uid = m["user_id"]
@@ -533,22 +534,31 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
             sent_count += 1
             continue
         human_total += 1
-        try:
-            res = await dm(message.bot,
-                uid,
-                f"🕊 <b>پیام جدید در مذاکره #{neg_id}</b>\n"
-                f"فرستنده: <b>{safe_sender}</b>\n\n"
-                f"«{safe_text}»",
-                reply_markup=kb([
-                    [("✍️ پاسخ به این پیام", f"g|negsend|{neg_id}")],
-                    [("💬 مشاهده اتاق مذاکره", f"g|negroom|{neg_id}")],
-                    [("🤝 به توافق رسیدیم", f"g|negok|{neg_id}")],
-                ]))
-            if res:
-                sent_count += 1
-                human_delivered += 1
-        except Exception as e:
-            log.warning("DM failed to negotiation member %s: %s", uid, e)
+        # دو تلاش: اول با HTML، بعد متن خالی (اگر HTML مشکل داشت)
+        res = None
+        for attempt in range(2):
+            try:
+                res = await message.bot.send_message(
+                    uid,
+                    (f"🕊 <b>پیام جدید در مذاکره #{neg_id}</b>\n"
+                     f"فرستنده: <b>{safe_sender}</b>\n\n"
+                     f"«{safe_text}»") if attempt == 0 else
+                    (f"🕊 پیام جدید در مذاکره #{neg_id}\n"
+                     f"فرستنده: {sender_name}\n\n«{text}»"),
+                    reply_markup=kb([
+                        [("✍️ پاسخ به این پیام", f"g|negsend|{neg_id}")],
+                        [("💬 مشاهده اتاق مذاکره", f"g|negroom|{neg_id}")],
+                        [("🤝 به توافق رسیدیم", f"g|negok|{neg_id}")],
+                    ]))
+                break
+            except Exception as e:
+                log.warning("DM attempt %s failed to member %s: %s", attempt + 1, uid, e)
+                res = None
+        if res:
+            sent_count += 1
+            human_delivered += 1
+        else:
+            undelivered.append(uid)
 
     # اگر هدف یک هیئت دیپلماتیک باشد، پاسخ هوشمند متقابل تولید و ارسال شود
     for npc_id in npc_targets:
@@ -573,10 +583,17 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
             pass
 
     if human_total and not human_delivered:
-        delivery = ("⚠️ پیام در اتاق ثبت شد اما به طرف مقابل تحویل داده نشد "
-                    "(او هنوز ربات را استارت نکرده یا ربات را بلاک کرده است).")
+        names = []
+        for u in undelivered[:3]:
+            try:
+                names.append(await _cname(u))
+            except Exception:
+                names.append(str(u))
+        delivery = ("⚠️ <b>پیام در اتاق ذخیره شد، اما به طرف مقابل تحویل داده نشد.</b>\n"
+                    f"دلیل معمول: {', '.join(names)} ربات را استارت نکرده یا بلاک کرده است.\n"
+                    "📌 پیام شما از بین نرفته — طرف مقابل با «💬 مشاهده اتاق مذاکره» آن را می‌بیند.")
     else:
-        delivery = f"👥 تحویل داده شده به {human_delivered or 'طرف مقابل'} نفر"
+        delivery = f"👥 تحویل داده شده به {human_delivered} نفر"
     confirm_text = (
         f"✅ <b>پیام شما در مذاکره #{neg_id} ثبت و ارسال شد:</b>\n\n"
         f"«{safe_text}»\n\n{delivery}"
@@ -584,10 +601,49 @@ async def _send_negotiation_msg(message: Message, neg_id: int | None, text: str)
     rows = [
         [("✍️ ارسال پیام بعدی", f"g|negsend|{neg_id}")],
         [("💬 مشاهده اتاق مذاکره", f"g|negroom|{neg_id}")],
+        [("📨 ارسال دوباره به طرف مقابل", f"g|negresend|{neg_id}")],
         [("🤝 به توافق رسیدیم (انعقاد معاهده)", f"g|negok|{neg_id}")],
         back_row("g|neg", "◀️ لیست مذاکرات"),
     ]
     await message.answer(confirm_text, reply_markup=kb(rows))
+
+
+@router.callback_query(F.data.startswith("g|negresend|"))
+async def negotiation_resend(call: CallbackQuery):
+    """ارسال دوبارهٔ آخرین پیام اتاق به همهٔ اعضا (اگر تحویل نشده بود)."""
+    neg_id = int(call.data.split("|")[2])
+    neg = await db.fetchone("SELECT * FROM negotiations WHERE id=?", (neg_id,))
+    if not neg:
+        return await call.answer("مذاکره یافت نشد", show_alert=True)
+    last = await db.fetchone(
+        "SELECT * FROM negotiation_msgs WHERE neg_id=? ORDER BY id DESC LIMIT 1", (neg_id,))
+    if not last:
+        return await call.answer("پیامی در این اتاق نیست", show_alert=True)
+    members = await db.fetchall(
+        "SELECT user_id FROM negotiation_members WHERE neg_id=? AND user_id>0 AND user_id!=?",
+        (neg_id, call.from_user.id))
+    if not members:
+        return await call.answer("طرف مقابل انسانی در این مذاکره نیست", show_alert=True)
+    sender_name = await _cname(last["sender_id"])
+    sent = 0
+    for m in members:
+        try:
+            await call.bot.send_message(
+                int(m["user_id"]),
+                f"🕊 پیام در مذاکره #{neg_id}\n"
+                f"فرستنده: {sender_name}\n\n«{last['text']}»",
+                reply_markup=kb([
+                    [("✍️ پاسخ", f"g|negsend|{neg_id}")],
+                    [("💬 مشاهده اتاق", f"g|negroom|{neg_id}")],
+                ]))
+            sent += 1
+        except Exception as e:
+            log.warning("resend failed to %s: %s", m["user_id"], e)
+    if sent:
+        await call.answer(f"✅ به {sent} نفر ارسال شد", show_alert=True)
+    else:
+        await call.answer("❌ باز هم تحویل نشد — طرف مقابل ربات را بلاک کرده است",
+                          show_alert=True)
 
 
 # ─── گفتگوی آزاد مذاکره (آخرین روتر) ───
@@ -1497,6 +1553,52 @@ async def straits_menu(call: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("g|stc|"))
+async def strait_attack_confirm(call: CallbackQuery):
+    """صفحهٔ تأیید حملهٔ فرسایشی — همیشه اجازه می‌دهد، فقط نتیجه را شفاف می‌گوید."""
+    from core.straits import attack_outlook
+    sid = int(call.data.split("|")[2])
+    s = await db.fetchone("SELECT * FROM straits WHERE id=? AND is_active=1", (sid,))
+    if not s:
+        return await call.answer("تنگه یافت نشد", show_alert=True)
+    look = await attack_outlook(call.from_user.id, s)
+    oc = look["owner_country"]
+    owner_label = (f"{oc['flag']} <b>{oc['name']}</b>" if oc else "بدون مالک")
+
+    if not s["owner_id"]:
+        # تنگهٔ آزاد: استقرار بدون درگیری
+        await call.answer()
+        msg = await capture_strait(call.bot, call.from_user.id, sid)
+        await call.message.answer(msg, reply_markup=kb([back_row("g|strait")]))
+        return await straits_menu(call)
+
+    if look["can_capture"]:
+        verdict = (f"✅ <b>این حمله شانس تصرف دارد: {look['win_chance']}٪</b>")
+    else:
+        verdict = ("⚔️ <b>این حمله فرسایشی است — تصرف در همین حمله ممکن نیست</b>\n"
+                   f"با حدود <b>{look['needed_rounds'] or '—'}</b> حملهٔ پیوسته، "
+                   "دفاع مدافع شکسته می‌شود.")
+    text = (
+        f"⚓ <b>حمله به تنگهٔ {s['emoji']} {s['name']}</b>\n\n"
+        f"🛡 مالک فعلی: {owner_label}\n\n"
+        f"🚢 قدرت دریایی شما: <b>{fmt(look['my_naval'])}</b>\n"
+        f"   (با استراتژی {look['strategy']['emoji']} {look['strategy']['name']}: "
+        f"<b>{fmt(look['atk_power'])}</b>)\n"
+        f"🛡 توان دفاع دریایی مدافع: <b>{fmt(look['owner_def'])}</b>\n"
+        f"🎯 قدرت لازم برای تصرف: <b>{fmt(look['need'])}</b>\n\n"
+        f"{verdict}\n\n"
+        f"♻️ <b>نبرد فرسایشی است:</b> هر حمله حداقل "
+        f"<b>{look['attrition']}٪</b> از ناوگان مدافع را از بین می‌برد، "
+        "حتی اگر این بار تنگه را نگیرید.\n\n"
+        "آیا حمله می‌کنید؟"
+    )
+    await call.answer()
+    await call.message.edit_text(text, reply_markup=kb([
+        [("⚔️ بله، حمله کن", f"g|stgo|{sid}")],
+        back_row("g|strait", "🔴 انصراف"),
+    ]))
+
+
+@router.callback_query(F.data.startswith("g|stgo|"))
 async def strait_capture(call: CallbackQuery):
     sid = int(call.data.split("|")[2])
     msg = await capture_strait(call.bot, call.from_user.id, sid)

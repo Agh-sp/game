@@ -49,13 +49,30 @@ async def base_list_text(user_id: int) -> tuple[str, list]:
         "SELECT b.*, c.name AS guest_name, c.flag AS guest_flag FROM bases b "
         "JOIN countries c ON c.owner_id=b.guest_id "
         "WHERE b.host_id=? AND b.status='pending'", (user_id,))
-    lines = ["🚚 <b>پایگاه نظامی</b>\n"]
+    naval = [b for b in my_bases if (b.get("kind") or "land") == "naval"]
+    land = [b for b in my_bases if (b.get("kind") or "land") != "naval"]
+    from core.straits import naval_base_power
+    bonus = await naval_base_power(user_id)
+    lines = ["🚚 <b>پایگاه نظامی و دریایی</b>\n"]
     lines.append("📡 <b>پایگاه‌های فعال من در کشورهای دیگر:</b>")
-    if my_bases:
-        for b in my_bases:
-            lines.append(f"✅ {b['host_flag']} {b['host_name']}")
-    else:
+    if land:
+        for b in land:
+            lines.append(f"✅ 🚚 {b['host_flag']} {b['host_name']}")
+    if naval:
+        for b in naval:
+            lines.append(f"✅ 🚢 {b['host_flag']} {b['host_name']} (دریایی)")
+    if not my_bases:
         lines.append("— ندارید —")
+    lines.append("")
+    lines.append(f"🚢 <b>پایگاه دریایی:</b> {fmt(bonus)} قدرت دریایی اضافه")
+    country = await db.fetchone(
+        "SELECT c.has_sea FROM countries c JOIN users u ON u.country_id=c.id WHERE u.id=?",
+        (user_id,))
+    if country and not country["has_sea"]:
+        lines.append("🌊 کشور شما مرز دریایی ندارد؛ با ساخت <b>پایگاه دریایی</b> "
+                     "می‌توانید در تنگه‌ها و نبردهای دریایی شرکت کنید.")
+    else:
+        lines.append("🌊 کشور شما مرز دریایی دارد؛ پایگاه دریایی قدرت دریایی شما را بیشتر می‌کند.")
     if pending_out:
         lines.append("\n⏳ <b>درخواست‌های ارسالی من:</b>")
         for b in pending_out:
@@ -70,7 +87,8 @@ async def base_list_text(user_id: int) -> tuple[str, list]:
             (f"✅ تأیید {b['guest_flag']} {b['guest_name']}", f"g|baseok|{b['id']}"),
             ("❌ رد", f"g|baseno|{b['id']}"),
         ])
-    rows.append([("🤝 درخواست پایگاه جدید", "g|basereq")])
+    rows.append([("🤝 درخواست پایگاه زمینی", "g|basereq")])
+    rows.append([("🚢 ساخت پایگاه دریایی", "g|navbase")])
     rows.append(back_row("g|army"))
     return "\n".join(lines), rows
 
@@ -113,6 +131,110 @@ async def base_reject(call: CallbackQuery):
         pass
     await call.answer("رد شد")
     await base_menu(call)
+
+
+# ─── 🚢 پایگاه دریایی ───
+
+
+async def naval_base_candidates(user_id: int) -> list[dict]:
+    """کشورهای ساحلی که بازیکن می‌تواند در آن‌ها پایگاه دریایی بسازد."""
+    return await db.fetchall(
+        "SELECT c.*, u.id AS owner_uid, u.full_name FROM users u "
+        "JOIN countries c ON c.id=u.country_id "
+        "WHERE u.id!=? AND u.banned=0 AND c.is_active=1 AND c.has_sea=1 "
+        "AND NOT EXISTS (SELECT 1 FROM bases b WHERE b.guest_id=? AND b.host_id=u.id "
+        "                AND COALESCE(b.kind,'land')='naval' AND b.status IN ('pending','active')) "
+        "ORDER BY c.population DESC LIMIT 25", (user_id, user_id))
+
+
+@router.callback_query(F.data == "g|navbase")
+async def naval_base_menu(call: CallbackQuery):
+    from core.straits import naval_base_power
+    from core.db import get_setting
+    cost = int(float(await get_setting("naval_base_cost", "300000000")))
+    per = int(float(await get_setting("naval_base_sea_power", "1500")))
+    user = await db.fetchone("SELECT money FROM users WHERE id=?", (call.from_user.id,))
+    money = int((user or {}).get("money") or 0)
+    bonus = await naval_base_power(call.from_user.id)
+    mine = await db.fetchall(
+        "SELECT b.id, c.name, c.flag FROM bases b JOIN countries c ON c.owner_id=b.host_id "
+        "WHERE b.guest_id=? AND COALESCE(b.kind,'land')='naval' AND b.status='active'",
+        (call.from_user.id,))
+    lines = [
+        "🚢 <b>پایگاه دریایی (اجارهٔ بندر)</b>\n",
+        f"💰 هزینهٔ ساخت: <b>{fmt_money(cost)}</b>",
+        f"⚓ قدرت دریایی هر پایگاه: <b>+{fmt(per)}</b>",
+        f"🌊 قدرت دریایی فعلی شما از پایگاه‌ها: <b>{fmt(bonus)}</b>\n",
+        "❓ <b>چرا پایگاه دریایی؟</b>\n"
+        "کشورهای <b>بدون مرز دریایی</b> با اجارهٔ بندر یک کشور ساحلی می‌توانند "
+        "ناوگان خود را مستقر کنند و <b>تنگه‌ها را تسخیر کنند</b>. "
+        "هر پایگاه قدرت دریایی شما را هم بالا می‌برد.",
+    ]
+    if mine:
+        lines.append("\n📡 <b>پایگاه‌های دریایی شما:</b>")
+        for b in mine:
+            lines.append(f"  ✅ {b['flag']} {b['name']}")
+    lines.append(f"\n💳 خزانه شما: <b>{fmt_money(money)}</b>")
+    rows = []
+    if mine:
+        rows.append([("🔙 بازگشت به پایگاه‌ها", "g|base")])
+    cands = await naval_base_candidates(call.from_user.id)
+    if not cands:
+        lines.append("\n⚠️ در حال حاضر کشور ساحلی آزادی برای اجارهٔ بندر نیست.")
+    else:
+        lines.append("\n🌍 <b>یک کشور ساحلی را برای اجارهٔ بندر انتخاب کنید:</b>")
+        for c in cands[:12]:
+            rows.append([(f"{c['flag']} {c['name']}",
+                          f"g|navbasego|{c['owner_uid']}")])
+    rows.append(back_row("g|base"))
+    await call.answer()
+    await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
+
+
+@router.callback_query(F.data.startswith("g|navbasego|"))
+async def naval_base_build(call: CallbackQuery):
+    host_id = int(call.data.split("|")[2])
+    if host_id == call.from_user.id:
+        return await call.answer("نمی‌توانید در کشور خودتان پایگاه دریایی بسازید", show_alert=True)
+    from core.db import get_setting
+    cost = int(float(await get_setting("naval_base_cost", "300000000")))
+    per = int(float(await get_setting("naval_base_sea_power", "1500")))
+    host_country = await get_country(host_id)
+    if not host_country or not host_country.get("has_sea"):
+        return await call.answer("❌ کشور میزبان مرز دریایی ندارد", show_alert=True)
+    dup = await db.fetchone(
+        "SELECT id FROM bases WHERE guest_id=? AND host_id=? AND COALESCE(kind,'land')='naval' "
+        "AND status IN ('pending','active')", (call.from_user.id, host_id))
+    if dup:
+        return await call.answer("شما همین حالا در این کشور پایگاه دریایی دارید", show_alert=True)
+    user = await db.fetchone("SELECT money FROM users WHERE id=?", (call.from_user.id,))
+    money = int((user or {}).get("money") or 0)
+    if money < cost:
+        return await call.answer(
+            f"❌ بودجه کافی نیست — نیاز: {fmt_money(cost)}", show_alert=True)
+    await db.execute("UPDATE users SET money=money-? WHERE id=?", (cost, call.from_user.id))
+    await db.execute(
+        "INSERT INTO bases(host_id, guest_id, status, kind, name) VALUES(?,?,'active','naval',?)",
+        (host_id, call.from_user.id, f"بندر {host_country['name']}"))
+    await bump_progress(call.from_user.id, "built")
+    me = await get_country(call.from_user.id)
+    try:
+        from core.events import log_event
+        await log_event("war", f"{me['name'] if me else call.from_user.id} در {host_country['name']} "
+                               "پایگاه دریایی ساخت")
+    except Exception:
+        pass
+    from core.straits import naval_base_power
+    bonus = await naval_base_power(call.from_user.id)
+    await call.answer(f"✅ پایگاه دریایی در {host_country['name']} ساخته شد!", show_alert=True)
+    await call.message.edit_text(
+        f"✅ <b>پایگاه دریایی ساخته شد!</b>\n\n"
+        f"🚢 {host_country['flag']} <b>{host_country['name']}</b>\n"
+        f"⚓ قدرت دریایی از پایگاه‌ها: <b>{fmt(bonus)}</b> (+{fmt(per)})\n"
+        f"💰 هزینه: {fmt_money(cost)}\n\n"
+        "حالا می‌توانید به ⚓ تنگه‌ها بروید و عملیات دریایی انجام دهید.",
+        reply_markup=kb([[("⚓ رفتن به تنگه‌ها", "g|strait")],
+                         [("🔙 بازگشت به پایگاه‌ها", "g|base")]]))
 
 
 @router.callback_query(F.data == "g|basereq")
@@ -162,6 +284,7 @@ def barracks_rows() -> list:
     return [
         [("📋 تجهیزات و سربازان من", "g|eq")],
         [("🛒 خرید تجهیزات", "g|eqshop")],
+        [("🧱 خرید مصالح ساختمانی", "g|matshop")],
         [("🎓 تعلیم سرباز", "g|train")],
         back_row("g|army"),
     ]

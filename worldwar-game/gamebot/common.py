@@ -293,6 +293,8 @@ async def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
 def empire_kb() -> InlineKeyboardMarkup:
     return kb([
         [("🏛 مدیریت کشور", "g|mg")],
+        [("💵 درآمد", "g|inc"), ("🗺 استان‌ها", "g|prov")],
+        [("🤝 اتحاد", "g|ally"), ("☢️ غنی‌سازی", "g|enrich")],
         [("⚔️ اتاق جنگ", "g|war")],
         [("🤝 تجارت بین‌المللی", "g|trd")],
         [("🕊 سازمان ملل", "g|un")],
@@ -310,6 +312,8 @@ def manage_kb() -> InlineKeyboardMarkup:
         [("⛪ دین و حکومت", "g|gov")],
         [("🏛 رهبری و انقلاب", "g|pol")],
         [("🛢 نفت و تجارت خودکار", "g|oil")],
+        [("♻️ فروش منابع (برق/آب/گاز/غذا)", "g|res")],
+        [("🧱 خرید مصالح ساختمانی", "g|matshop")],
         [("🏢 شرکت‌های من", "g|comp")],
         home_row(),
     ])

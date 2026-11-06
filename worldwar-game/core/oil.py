@@ -147,23 +147,35 @@ async def per_rig_barrels(user_id: int) -> int:
     return int(base * await level_barrel_mult(int(biz.get("level") or 1)))
 
 
-async def income_estimate(user_id: int) -> dict:
-    """برآورد درآمد فروش خودکار بعدی (به تومان و به میلیون)."""
+async def sale_amount(user_id: int, barrels: int) -> dict:
+    """مبلغ فروش برای `barrels` بشکه — **بدون سقف**: هر بشکه بیشتر، پول بیشتر.
+
+    فرمول: پایهٔ نفتی کشور × سطح تجهیزات × (۰٫۳۵ + ۰٫۶۵ × بشکه/مرجع)
+    یعنی ۵٬۰۰۰ بشکه = ۱ برابر پایه، ۵۰٬۰۰۰ بشکه = حدود ۷ برابر پایه.
+    همیشه دست‌کم ۱ میلیون (درآمد فروش خودکار هرگز ریز نمی‌شود).
+    """
     country = await get_country(user_id) or {}
     biz = await ensure_business(user_id)
     level = int(biz.get("level") or 1)
     base_m = int(country.get("oil_income_base") or 2)
     mult = await level_income_mult(level)
+    need = max(1, int(float(await get_setting("oil_sale_need_barrels", "5000"))))
+    ratio = max(0.0, barrels / need)
+    amount = int(base_m * 1_000_000 * mult * (0.35 + 0.65 * ratio))
+    if barrels > 0:
+        amount = max(1_000_000, amount)
+    return {"amount": amount, "base_millions": base_m, "level": level,
+            "level_mult": round(mult, 2), "need": need, "ratio": round(ratio, 2)}
+
+
+async def income_estimate(user_id: int) -> dict:
+    """برآورد درآمد فروش خودکار بعدی (همهٔ بشکه‌های انبار فروخته می‌شود)."""
     state = await get_state(user_id)
     stock = int(state.get("oil_stock") or 0)
-    need = max(1, int(float(await get_setting("oil_sale_need_barrels", "5000"))))
-    ratio = min(1.0, stock / need)
-    amount = int(base_m * 1_000_000 * mult * (0.35 + 0.65 * ratio))
-    if stock >= 100:
-        amount = max(1_000_000, amount)   # حداقل ۱ میلیون در هر فروش (بازهٔ ۱ تا ۲۰+ میلیون)
-    return {"base_millions": base_m, "level": level, "income": amount,
-            "income_millions": round(amount / 1_000_000, 2), "stock": stock,
-            "need": need, "ratio": round(ratio, 2)}
+    calc = await sale_amount(user_id, stock)
+    return {**calc, "income": calc["amount"],
+            "income_millions": round(calc["amount"] / 1_000_000, 2),
+            "stock": stock}
 
 
 async def upgrade_business(user_id: int) -> tuple[bool, str]:
@@ -173,8 +185,8 @@ async def upgrade_business(user_id: int) -> tuple[bool, str]:
     cap = await level_max()
     if level >= cap:
         return False, f"🏆 تجهیزات استخراج شما در بالاترین سطح ({cap}) است."
-    if await rig_count(user_id) <= 0:
-        return False, "❌ برای ارتقای تجهیزات ابتدا حداقل یک دکل نفتی بسازید (🎖 پادگان → دکل)."
+    # ارتقا همیشه ممکن است (حتی قبل از ساخت اولین دکل) — سطح بالاتر یعنی
+    # استخراج بیشتر از هر دکل و درآمد فروش بالاتر.
     cost = await upgrade_cost(level)
     user = await db.fetchone("SELECT money FROM users WHERE id=?", (user_id,))
     money = int((user or {}).get("money") or 0)
@@ -223,16 +235,14 @@ async def auto_sell_tick(bot=None) -> int:
         uid = int(r["uid"])
         if await rig_count(uid) <= 0:
             continue
-        est = await income_estimate(uid)
         state = await get_state(uid)
         stock = int(state.get("oil_stock") or 0)
         if stock < 100:
             continue
-        need = est["need"]
-        sold = min(stock, need)
-        amount = int(est["base_millions"] * 1_000_000 * await level_income_mult(est["level"])
-                     * (0.35 + 0.65 * (sold / need)))
-        amount = max(1_000_000, amount)
+        # 💰 همهٔ نفت انبار فروخته می‌شود (قبلاً فقط ۵٬۰۰۰ بشکه فروش می‌رفت)
+        sold = stock
+        calc = await sale_amount(uid, sold)
+        amount = max(1_000_000, int(calc["amount"]))
         if amount <= 0:
             continue
         await db.execute("UPDATE states SET oil_stock=MAX(0, oil_stock-?) WHERE user_id=?",
@@ -251,10 +261,11 @@ async def auto_sell_tick(bot=None) -> int:
                 from gamebot.common import dm
                 await dm(bot, uid,
                          f"🛢 <b>درآمد فروش خودکار نفت</b>\n\n"
-                         f"⛽ {fmt(sold)} بشکه نفت فروش رفت.\n"
+                         f"⛽ {fmt(sold)} بشکه نفت فروش رفت "
+                         f"(سطح تجهیزات {calc['level']} — ×{calc['level_mult']}).\n"
                          f"💰 واریز به خزانه: <b>{fmt_money(amount)}</b> "
                          f"({round(amount / 1_000_000, 2)} میلیون)\n"
-                         f"🛠 سطح تجهیزات: {est['level']} | 📊 مجموع درآمد نفت: "
+                         f"🛠 سطح تجهیزات: {calc['level']} | 📊 مجموع درآمد نفت: "
                          f"{fmt_money(int(r['total_income'] or 0) + amount)}")
             except Exception:
                 pass

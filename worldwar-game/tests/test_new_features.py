@@ -175,6 +175,10 @@ async def run():
     money_before = (await db.fetchone("SELECT money FROM users WHERE id=?", (UB,)))["money"]
     SENT.clear()
     await dp.feed_update(bot, cb_update(UA, "g|wgo"))
+    texts, _ = shot("confirm land attack")
+    check(any("تأیید حمله" in t for t in texts), "attack confirmation rendered")
+    SENT.clear()
+    await dp.feed_update(bot, cb_update(UA, "g|wgogo"))
     texts, _ = shot("execute land attack")
     joined = "\n".join(texts)
     check("گزارش نبرد" in joined, "battle report produced")

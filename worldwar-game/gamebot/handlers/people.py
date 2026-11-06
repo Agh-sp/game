@@ -10,6 +10,7 @@ from core.economy import (add_asset, bump_progress, consumption, get_country,
                           get_state, project_done, satisfaction_recompute,
                           sector_capacity, asset_qty)
 from core.utils import fmt, fmt_money, jloads, jdumps, clamp, progress_bar
+from core import internet
 from gamebot.common import back_row, kb, send_home
 
 
@@ -416,6 +417,7 @@ async def welfare_menu(call: CallbackQuery):
     tax_val = round(((state.get("tax_rate") if state else 0) or 0) * 100, 1)
     chosen_laws_dict = jloads((state.get("chosen_laws") if state else "{}") or "{}", {})
     
+    net_info = internet.level_info(await internet.get_level(call.from_user.id))
     text = (
         "🎁 <b>رفاه مردم و قوانین</b>\n\n"
         f"💵 ارز کشور: <b>{cur_name}</b> — امتیاز: <b>{info.get('score', 0)}</b> — رتبه جهانی: <b>{info.get('rank', 0)}/{info.get('total', 1)}</b>\n"
@@ -423,6 +425,8 @@ async def welfare_menu(call: CallbackQuery):
         + f"🎁 یارانه روزانه: <b>{fmt_money(subsidy_val)}</b> (سقف اثرگذار: {fmt_money(threshold)})\n"
         f"💰 نرخ مالیات: <b>{tax_val}%</b>\n"
         f"⚖️ قوانین انتخابی: <b>{len(chosen_laws_dict)}</b>\n\n"
+        f"🌐 رفاه اینترنت: <b>سطح {net_info['level']}</b> — پوشش "
+        f"<b>{net_info['coverage']}%</b> ({net_info['emoji']} {net_info['name']})\n"
         "⚠️ یارانه از درآمد روزانه کسر می‌شود — هرچه از سقف بیشتر باشد رضایت بیشتر است.\n"
         "💡 امتیاز ارز = اقتصاد (تجارت ۲۴ ساعت اخیر + خزانه) + نظامی + رضایت مردمی.\n"
         "کشورهایی با ارز مشترک (مثل یورو) امتیاز جمعی÷تعداد دارند."
@@ -432,6 +436,7 @@ async def welfare_menu(call: CallbackQuery):
         await call.message.edit_text(text, reply_markup=kb([
             [("💵 ارز", "g|cur"), ("🎁 یارانه", "g|sub")],
             [("💰 مالیات", "g|tax"), ("⚖️ قوانین", "g|laws")],
+            [("🌐 رفاه اینترنت", "g|inet")],
             back_row("g|ppl"),
         ]))
     except Exception:
@@ -535,6 +540,44 @@ class _fake_call:
         pass
 
 
+# ─── 🌐 رفاه اینترنت ───
+
+
+@router.callback_query(F.data == "g|inet")
+async def internet_menu(call: CallbackQuery):
+    await call.answer()
+    text = await internet.internet_text(call.from_user.id)
+    level = await internet.get_level(call.from_user.id)
+    top = await internet.max_level()
+    rows = []
+    if level < top:
+        cost, mats = await internet.upgrade_cost(call.from_user.id)
+        rows.append([(f"⬆️ ارتقا ({fmt_money(cost)} + {fmt(mats)} مصالح)", "g|inetgo")])
+    rows.append(back_row("g|sec|welfare"))
+    try:
+        await call.message.edit_text(text, reply_markup=kb(rows))
+    except Exception:
+        await call.message.answer(text, reply_markup=kb(rows))
+
+
+@router.callback_query(F.data == "g|inetgo")
+async def internet_upgrade(call: CallbackQuery):
+    ok, msg = await internet.upgrade(call.from_user.id)
+    await call.answer("✅ ارتقا انجام شد" if ok else "❌", show_alert=not ok)
+    level = await internet.get_level(call.from_user.id)
+    top = await internet.max_level()
+    rows = []
+    if ok and level < top:
+        cost, mats = await internet.upgrade_cost(call.from_user.id)
+        rows.append([(f"⬆️ ارتقای بعدی ({fmt_money(cost)})", "g|inetgo")])
+    rows.append(back_row("g|sec|welfare"))
+    text = msg + "\n\n" + await internet.internet_text(call.from_user.id)
+    try:
+        await call.message.edit_text(text, reply_markup=kb(rows))
+    except Exception:
+        await call.message.answer(text, reply_markup=kb(rows))
+
+
 @router.callback_query(F.data == "g|sub")
 async def subsidy_menu(call: CallbackQuery, state: FSMContext):
     st = await get_state(call.from_user.id)
@@ -567,6 +610,7 @@ async def subsidy_input(message: Message, state: FSMContext):
     await send_home(message, "🎁 رفاه:", reply_markup=kb([
         [("💵 پول", "g|cur"), ("🎁 یارانه", "g|sub")],
         [("💰 مالیات", "g|tax"), ("⚖️ قوانین", "g|laws")],
+        [("🌐 رفاه اینترنت", "g|inet")],
         back_row("g|ppl"),
     ]))
 
@@ -617,6 +661,7 @@ async def tax_input(message: Message, state: FSMContext):
     await send_home(message, "🎁 رفاه:", reply_markup=kb([
         [("💵 پول", "g|cur"), ("🎁 یارانه", "g|sub")],
         [("💰 مالیات", "g|tax"), ("⚖️ قوانین", "g|laws")],
+        [("🌐 رفاه اینترنت", "g|inet")],
         back_row("g|ppl"),
     ]))
 

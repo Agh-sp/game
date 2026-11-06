@@ -40,17 +40,18 @@ async def _oil_menu(call: CallbackQuery):
         "🛢 <b>بخش نفت و تجارت خودکار</b>\n\n"
         f"⛏ مخزن زیرزمینی کشور: <b>{fmt(d['reserve'])}</b> بشکه\n"
         f"🏭 انبار نفت شما: <b>{fmt(d['stock'])}</b> بشکه\n"
-        f"🛢 دکل‌های نفتی: <b>{d['rigs']}</b> (هر دکل {fmt(per_rig)} بشکه در هر تیک ۳۰ دقیقه‌ای)\n"
-        f"🛠 سطح تجهیزات استخراج: <b>{level}</b>/{cap}\n"
-        + (f"➡️ هزینهٔ ارتقای بعدی: <b>{fmt_money(nxt_cost)}</b>\n" if nxt_cost else "🏆 حداکثر سطح\n")
+        f"🛢 دکل‌های نفتی: <b>{d['rigs']}</b> (هر دکل {fmt(per_rig)} بشکه در هر تیک)\n"
+        f"🛠 سطح تجهیزات استخراج: <b>{level}</b>/{cap}"
+        + (f" — ➡️ ارتقا: <b>{fmt_money(nxt_cost)}</b>\n" if nxt_cost else " — 🏆 حداکثر\n")
         + f"🤖 تجارت خودکار: <b>{'روشن ✅' if auto else 'خاموش ⏸'}</b>"
-        f" — درآمد هر {minutes} دقیقه: <b>{est['income_millions']} میلیون تومان</b>\n"
-        f"💵 پایهٔ نفتی کشور شما: <b>{est['base_millions']} میلیون</b> در هر فروش کامل\n"
+        f" — هر {minutes} دقیقه <b>کل انبار</b> فروخته می‌شود\n"
+        f"💵 ارزش فروش انبار فعلی: <b>{est['income_millions']} میلیون</b>\n"
+        f"🏦 پایهٔ نفتی کشور شما: <b>{est.get('base_millions')} میلیون</b>\n"
         + (f"📊 مجموع درآمد نفت تاکنون: <b>{fmt_money(int(biz.get('total_income') or 0))}</b>"
            f" ({int(biz.get('sales') or 0)} فروش)\n" if int(biz.get("sales") or 0) else "")
         + f"🎲 نفت‌خیزی (شانس اکتشاف): <b>{round(d['richness'])}٪</b>\n\n"
-        "💡 استخراج با دکل انجام می‌شود؛ با ارتقای تجهیزات، هم بشکهٔ بیشتری استخراج می‌شود "
-        "و هم درآمد فروش بالاتر می‌رود (هر سطح گران‌تر از قبلی)."
+        "💡 با ارتقای تجهیزات، هر دکل بشکهٔ بیشتری استخراج می‌کند و "
+        "<b>هر بشکهٔ بیشتر پول بیشتری</b> می‌دهد — سقف فروش برداشته شد."
     )
     rows = [
         [("🛠 ارتقای تجهیزات استخراج", "g|oilup")],
@@ -351,7 +352,7 @@ async def oil_upgrade(call: CallbackQuery):
         f"⬆️ هزینهٔ ارتقا به سطح {level + 1}: <b>{fmt_money(cost)}</b>\n"
         f"💳 خزانه شما: <b>{fmt_money(money)}</b>\n"
         + (f"🔺 هزینهٔ مرحلهٔ بعد از آن: {fmt_money(nxt)} (هر سطح گران‌تر)\n" if nxt else "")
-        + "\nتأیید می‌کنید؟",
+        + "\nتأیید می‌کنید؟"
     )
     rows = [[("✅ پرداخت و ارتقا", "g|oilupgo")], back_row("g|oil")]
     await call.answer()

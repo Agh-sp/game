@@ -121,11 +121,22 @@ async def main():
     H.check("دفاع موفق" in ann2 or "دفع شد" in ann2, "کانال پیروزی مدافع را نوشت")
 
     # ─── تست ۳: نبود نیروی کافی ───
-    print("\n== TEST 3: نبرد بدون نیروی کافی ==")
+    print("\n== TEST 3: نیروی ناکافی → حملهٔ فرسایشی (بدون بلاک) ==")
     await db.execute("UPDATE player_assets SET quantity=1 WHERE user_id=101 AND item_type='equipment' AND item_id=?",
                      (frigate["id"],))
-    ok, err = await straits.capture_requirements(101, await db.fetchone("SELECT * FROM straits WHERE id=?", (sid,)))
-    H.check(not ok and "کافی نیست" in err, f"نیروی ناکافی رد می‌شود ({err.splitlines()[0][:60]})")
+    st_row = await db.fetchone("SELECT * FROM straits WHERE id=?", (sid,))
+    ok, err = await straits.capture_requirements(101, st_row)
+    H.check(ok and err == "", f"حمله حتی با ناوگان ناکافی مجاز است (err={err!r})")
+    look = await straits.attack_outlook(101, st_row)
+    H.check(look["can_capture"] is False, "پیش‌بینی: در همین حمله تصرف ممکن نیست")
+    H.check(look["needed_rounds"] >= 1, f"تعداد حملهٔ فرسایشی لازم: {look['needed_rounds']}")
+    def_before = await straits.naval_defense(102)
+    await add_asset(102, "equipment", frigate["id"], 5)   # ناوگان واقعی برای فرسایش
+    def_before = await straits.naval_defense(102)
+    await straits.capture_strait(bot, 101, sid)
+    def_after = await straits.naval_defense(102)
+    H.check(def_after < def_before, f"فرسایش تضمینی: دفاع مدافع {def_before} → {def_after}")
+
 
     # ─── تست ۴: نبرد کشورها — تلفات سرباز و تجهیزات هر دو طرف ───
     print("\n== TEST 4: نبرد کشورها با استراتژی و تلفات دو طرف ==")
@@ -186,7 +197,12 @@ async def main():
     orig_random = random.random
     random.random = lambda: 0.01
     try:
+        # مرحلهٔ ۱: صفحهٔ تأیید حمله
         await dp.feed_update(bot, H.cb_update(101, f"g|stc|{sid}"))
+        confirm_txt = "\n".join(t for (_n, _c, t, _p) in H.SENT if t)
+        H.check("آیا حمله می‌کنید؟" in confirm_txt, "صفحهٔ تأیید حمله نمایش داده شد")
+        # مرحلهٔ ۲: تأیید و اجرای نبرد
+        await dp.feed_update(bot, H.cb_update(101, f"g|stgo|{sid}"))
     finally:
         random.random = orig_random
     H.check(len(H.ERRORS) == err_before, "بدون خطای اجرایی در مسیر دکمه‌ها")

@@ -49,7 +49,8 @@ def cb_update(uid, data):
     msg = TGMessage(message_id=10, date=datetime.now(timezone.utc),
                     chat=Chat(id=uid, type="private"), text="prev").as_(BOT_REF["bot"])
     return Update(update_id=1, callback_query=CallbackQuery(
-        id="cb1", from_user=tg_uid(uid), chat_instance="ci", data=data, message=msg))
+        id="cb1", from_user=tg_uid(uid), chat_instance="ci", data=data,
+        message=msg).as_(BOT_REF["bot"]))
 
 
 def msg_update(uid, text):

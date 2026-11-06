@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from core.db import db, get_setting
+from core.db import db, get_setting, set_setting
 from core.economy import (announce, army_power, bump_progress, get_country,
                           get_state, has_project_named, is_disarmed,
                           is_jammed, is_leader_blocked, sub_asset, veto_users)
@@ -17,11 +17,15 @@ from gamebot.common import back_row, blocked_banner, kb, send_home, dm
 router = Router()
 
 ATTACK_TYPES = {"sea": "⚓ دریایی", "air": "✈️ هوایی", "land": "🪖 زمینی",
-                "missile": "🚀 موشکی", "space": "🛰️ فضایی", "mixed": "🔀 ترکیبی"}
+                "missile": "🚀 موشکی", "space": "🛰️ فضایی", "mixed": "🔀 ترکیبی",
+                "conquest": "⚔️ حمله به قصد تسخیر"}
+
+CONQUEST_FORCE = "mixed"       # حملهٔ تسخیر از همهٔ نیروها استفاده می‌کند
 
 ATTACK_CATS = {"sea": ["sea"], "air": ["air"], "land": ["land"],
                "missile": ["missile", "land"], "space": ["space"],
                "mixed": ["sea", "air", "land", "missile", "space"]}
+ATTACK_CATS["conquest"] = ["sea", "air", "land", "missile", "space"]
 
 ATTACK_RULES = {
     "sea": "کشور هدف باید دریا داشته باشد و شما نیروی دریایی داشته باشید",
@@ -30,6 +34,8 @@ ATTACK_RULES = {
     "missile": "از هر فاصله‌ای — نیاز به موشک (کروز/بالستیک/ضدکشتی/راکت‌انداز)",
     "space": "از هرجای دنیا — فقط با تسلیحات فضایی",
     "mixed": "ترکیب دو یا چند نوع حمله",
+    "conquest": "🏴 با پیروزی، یک استان از مدافع جدا و به شما اضافه می‌شود "
+                "(حملهٔ عادی استان نمی‌گیرد)",
 }
 
 
@@ -70,7 +76,8 @@ async def war_room(call: CallbackQuery):
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb([
         [("📢 اعلان جنگ", "g|wdec")],
-        [("🗡 حمله", "g|watk")],
+        [("🗡 حمله (عادی / تسخیر)", "g|watk")],
+        [("☢️ هدف قرار دادن تأسیسات هسته‌ای", "g|nuk")],
         [("🕶 سایبری", "g|wcyb")],
         back_row("g|emp"),
     ]))
@@ -346,7 +353,10 @@ async def _attack_options(user_id: int, defender_id: int) -> tuple[dict, dict]:
     space_ok = bool(d_country and has("space"))
     ok = {"sea": sea_ok, "air": air_ok, "land": land_ok,
           "missile": missile_ok, "space": space_ok,
-          "mixed": sum([sea_ok, air_ok, land_ok, missile_ok, space_ok]) >= 2}
+          "mixed": sum([sea_ok, air_ok, land_ok, missile_ok, space_ok]) >= 2,
+          # تسخیر: با هر نیرویی که حمله را ممکن کند (دریایی/هوایی/زمینی/ترکیبی)
+          "conquest": any([sea_ok, air_ok, land_ok]) or
+                      sum([sea_ok, air_ok, land_ok, missile_ok, space_ok]) >= 2}
 
     reason = {}
     if not sea_ok:
@@ -364,6 +374,9 @@ async def _attack_options(user_id: int, defender_id: int) -> tuple[dict, dict]:
         reason["space"] = "تسلیحات فضایی ندارید (فقط با سکه شاهی)"
     if not ok["mixed"]:
         reason["mixed"] = "برای حمله ترکیبی باید حداقل دو نوع حمله ممکن داشته باشید"
+    if not ok["conquest"]:
+        reason["conquest"] = ("برای تسخیر باید حملهٔ دریایی، هوایی یا زمینی ممکن باشد "
+                              "(تجهیزات/سرباز و دسترسی به کشور هدف)")
     return ok, reason
 
 
@@ -379,9 +392,16 @@ async def attack_type(call: CallbackQuery, state: FSMContext):
         return await call.answer("کشور مدافع یافت نشد", show_alert=True)
     ok, reason = await _attack_options(call.from_user.id, war["defender_id"])
 
-    lines = [f"🎯 حمله به {d_country['flag']} <b>{d_country['name']}</b>\n"]
+    prov = await db.fetchone(
+        "SELECT COUNT(*) c FROM provinces WHERE owner_id=?", (war["defender_id"],))
+    lines = [f"🎯 حمله به {d_country['flag']} <b>{d_country['name']}</b>\n",
+             "🅰️ <b>حملهٔ عادی</b> — فقط زیرساخت‌ها را می‌زند (رضایت، منابع، پدافند). "
+             "استان نمی‌گیرد.",
+             "🅱️ <b>حملهٔ تسخیر</b> — با پیروزی یک استان از دشمن جدا می‌شود و غارت ۲۰٪ بیشتر "
+             f"است.\n🗺 استان‌های مدافع: <b>{fmt((prov or {}).get('c') or 0)}</b>\n"]
     for key, title in ATTACK_TYPES.items():
-        lines.append(f"{'✅' if ok[key] else '❌'} {title} — {ATTACK_RULES[key]}")
+        prefix = "⚔️" if key == "conquest" else ("✅" if ok[key] else "❌")
+        lines.append(f"{prefix} {title} — {ATTACK_RULES[key]}")
         if not ok[key] and reason.get(key):
             lines.append(f"     ↳ {reason[key]}")
     if not any(ok.values()):
@@ -389,7 +409,8 @@ async def attack_type(call: CallbackQuery, state: FSMContext):
                      "یا با کشوری هم‌منطقه بجنگید.")
     rows = []
     for key, title in ATTACK_TYPES.items():
-        rows.append([(f"{'✅' if ok[key] else '❌'} {title}", f"g|wtype|{war_id}|{key}")])
+        mark = "⚔️" if key == "conquest" else ("✅" if ok[key] else "❌")
+        rows.append([(f"{mark} {title}", f"g|wtype|{war_id}|{key}")])
     rows.append(back_row("g|watk"))
     await state.update_data(plan={}, war_id=war_id)
     await call.answer()
@@ -526,8 +547,95 @@ class _MessageCall:
         pass
 
 
+async def attack_cooldown_state(user_id: int) -> tuple[bool, int, str]:
+    """آیا بازیکن می‌تواند حمله کند؟ → (آماده، ثانیه باقی‌مانده، متن خطا)"""
+    minutes = 3.0
+    try:
+        minutes = max(0.0, float(await get_setting("attack_cooldown_minutes", "3")))
+    except (TypeError, ValueError):
+        minutes = 3.0
+    if minutes <= 0:
+        return True, 0, ""
+    row = await db.fetchone("SELECT last_attack_at FROM states WHERE user_id=?", (user_id,))
+    last = (row or {}).get("last_attack_at")
+    if not last:
+        return True, 0, ""
+    from core.utils import now as _now, parse as _parse
+    try:
+        then = _parse(last)
+        if then is None:
+            return True, 0, ""
+        elapsed = (_now() - then).total_seconds()
+    except Exception:
+        return True, 0, ""
+    remaining = int(minutes * 60 - elapsed)
+    if remaining <= 0:
+        return True, 0, ""
+    m, sec = divmod(remaining, 60)
+    return False, remaining, (f"⏳ <b>نیروهای شما در حال بازسازی هستند</b>\n\n"
+                              f"⏱ زمان باقی‌مانده: <b>{m}:{sec:02d}</b>\n"
+                              "پس از این مدت می‌توانید دوباره حمله کنید.")
+
+
 @router.callback_query(F.data == "g|wgo")
+async def attack_confirm(call: CallbackQuery, state: FSMContext):
+    """🛑 صفحهٔ تأیید نهایی حمله — نوع عملیات و نیروها یک‌بار دیگر نشان داده می‌شود."""
+    ready, _remaining, _msg = await attack_cooldown_state(call.from_user.id)
+    if not ready:
+        return await call.answer("⏳ نیروها در حال بازسازی‌اند — کمی صبر کنید", show_alert=True)
+    data = await state.get_data()
+    plan = data.get("plan", {})
+    atype = data.get("atype", "mixed")
+    war = await db.fetchone("SELECT * FROM wars WHERE id=? AND attacker_id=? AND status='active'",
+                            (data.get("war_id"), call.from_user.id))
+    if not war:
+        return await call.answer("جنگ فعال نیست — اول اعلان جنگ بدهید", show_alert=True)
+    d_country = await get_country(war["defender_id"])
+    conquest = atype == "conquest"
+    prov = await db.fetchone("SELECT COUNT(*) c FROM provinces WHERE owner_id=?",
+                             (war["defender_id"],))
+    lines = [
+        f"⚔️ <b>تأیید حمله به {d_country['flag']} {d_country['name']}</b>\n",
+        f"🎯 نوع عملیات: <b>{ATTACK_TYPES.get(atype, atype)}</b>",
+    ]
+    if conquest:
+        lines += [
+            "🏴 <b>حمله به قصد تسخیر:</b> با پیروزی یک استان از دشمن جدا می‌شود "
+            f"(مدافع الان {fmt((prov or {}).get('c') or 0)} استان دارد) و غارت ۲۰٪ بیشتر است.",
+            "💥 اگر شکست بخورید، استان‌ها دست‌نخورده می‌مانند و شما تلفات می‌دهید.",
+        ]
+    else:
+        lines += [
+            "💥 <b>حملهٔ عادی:</b> زیرساخت‌ها (رضایت مردم، منابع، پدافند) آسیب می‌بینند "
+            "اما <b>استانی گرفته نمی‌شود</b>.",
+        ]
+    if plan:
+        eq_names = {}
+        for eid in plan:
+            e = await db.fetchone("SELECT emoji, name FROM equipment WHERE id=?", (int(eid),))
+            if e:
+                eq_names[eid] = f"{e['emoji']} {e['name']}"
+        lines.append("\n📦 <b>نیروهای اعزامی:</b>")
+        for eid, qty in list(plan.items())[:8]:
+            lines.append(f"  {eq_names.get(eid, eid)} ×{fmt(qty)}")
+    soldiers = await db.fetchone(
+        "SELECT COALESCE(SUM(quantity),0) c FROM player_assets WHERE user_id=? AND item_type='soldier'",
+        (call.from_user.id,))
+    if soldiers and soldiers["c"]:
+        lines.append(f"  🪖 {fmt(soldiers['c'])} سرباز")
+    lines.append("\nآیا مطمئن هستید؟")
+    await call.answer()
+    await call.message.edit_text("\n".join(lines), reply_markup=kb([
+        [("✅ بله، حمله کن", "g|wgogo")],
+        back_row("g|war", "🔴 انصراف"),
+    ]))
+
+
+@router.callback_query(F.data == "g|wgogo")
 async def attack_go(call: CallbackQuery, state: FSMContext):
+    ready, _remaining, msg = await attack_cooldown_state(call.from_user.id)
+    if not ready:
+        return await call.answer("⏳ نیروها در حال بازسازی‌اند — کمی صبر کنید", show_alert=True)
     data = await state.get_data()
     plan = data.get("plan", {})
     war = await db.fetchone("SELECT * FROM wars WHERE id=? AND attacker_id=? AND status='active'",
@@ -547,6 +655,12 @@ async def attack_go(call: CallbackQuery, state: FSMContext):
 
 async def resolve_battle(call, war: dict, plan: dict, atype: str):
     attacker_id, defender_id = war["attacker_id"], war["defender_id"]
+    # ⚔️ «حمله به قصد تسخیر» یک حالت است نه یک نوع نیرو: نیروهای انتخاب‌شده
+    # تعیین می‌کنند نبرد از چه طریقی انجام شود.
+    conquest = atype == "conquest"
+    if conquest:
+        atype = CONQUEST_FORCE
+    conquest = conquest or False
     a_country = await get_country(attacker_id)
     d_country = await get_country(defender_id)
     if not a_country or not d_country:
@@ -660,7 +774,11 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     defender_user = await db.fetchone("SELECT * FROM users WHERE id=?", (defender_id,)) or {"money": 0}
     loot = 0
     if won:
-        loot = int((defender_user["money"] or 0) * 0.10)
+        loot_pct = 0.10
+        if conquest:
+            # 💰 در حملهٔ تسخیر، غارت بیشتری نصیب مهاجم می‌شود
+            loot_pct += float(await get_setting("conquest_loot_bonus", "20")) / 100 * 0.10
+        loot = int((defender_user["money"] or 0) * loot_pct)
         await db.execute("UPDATE users SET money=money-? WHERE id=?", (loot, defender_id))
         await db.execute("UPDATE users SET money=money+? WHERE id=?", (loot, attacker_id))
     else:
@@ -710,7 +828,51 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         extra_lines.append(f"💰 غارت خزانه دشمن: <b>{fmt_money(loot)}</b>")
     if infrastructure_damage:
         extra_lines.append(infrastructure_damage.strip())
-    extra_lines.append(f"🎯 نوع عملیات: {atype_fa}")
+    if conquest:
+        extra_lines.append("🏴 <b>حمله به قصد تسخیر:</b> با پیروزی، یک استان از دشمن جدا می‌شود "
+                           "و غارت خزانه ۲۰٪ بیشتر است.")
+    extra_lines.append(f"🎯 نوع عملیات: {atype_fa}" + (" (تسخیر)" if conquest else ""))
+
+    # 🗺 استان‌ها و زیرساخت‌ها
+    province_line = ""
+    try:
+        from core import provinces as prov
+        if conquest:
+            # ⚔️ فقط حملهٔ تسخیر استان می‌گیرد
+            province_line = await prov.battle_province_effect(
+                call.bot, attacker_id, defender_id,
+                attacker_power=atk_power, defender_power=d_def,
+                won=won, war_id=war.get("id"), conquest=True)
+        elif won:
+            # 💥 حملهٔ عادی فقط زیرساخت‌ها را می‌زند
+            province_line = await prov.infrastructure_strike(
+                call.bot, attacker_id, defender_id, atype, won,
+                attacker_power=atk_power)
+    except Exception:
+        log.exception("province effect failed")
+    if province_line:
+        extra_lines.append(province_line.strip())
+
+    # 🛡 کمک دفاعی متحدان (اتحاد)
+    try:
+        from core import alliances as al
+        bonus = await al.defense_bonus(defender_id)
+        if bonus["bonus"] > 0 and won:
+            extra_lines.append(
+                f"🤝 متحدان مدافع وارد شدند: {len(bonus['allies'])} متحد با "
+                f"{bonus['percent']}٪ توان دفاعی")
+    except Exception:
+        pass
+
+    # 📋 خلاصهٔ شفاف نتیجه برای کانال اطلاع‌رسانی
+    if won:
+        outcome = (f"🏆 <b>{a_country['name']} پیروز شد</b> — "
+                   + ("یک استان از دشمن جدا شد." if conquest and "استان تصاحب شد" in province_line
+                      else "زیرساخت‌های دشمن آسیب دید." if not conquest
+                      else "اما پدافند دشمن استان را حفظ کرد."))
+    else:
+        outcome = f"🛡 <b>{d_country['name']} حمله را دفع کرد</b> — مالکیت و استان‌ها دست‌نخورده ماند."
+    extra_lines.insert(0, outcome)
 
     result_text = combat.battle_report(
         strat=dict(strat, name=f"{strat['name']} ({atype_fa.strip()})"),
@@ -720,6 +882,14 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         atk_units=atk_lost_units, def_units=def_lost_units,
         atk_ratio=atk_loss, def_ratio=def_loss,
         extra_lines=extra_lines, title=f"گزارش نبرد {atype_fa}")
+
+    # ⏳ ثبت زمان حمله برای کول‌داون ۳ دقیقه‌ای
+    try:
+        await db.execute(
+            "UPDATE states SET last_attack_at=? WHERE user_id=?", (iso(), attacker_id))
+    except Exception:
+        pass
+
     await announce(call.bot, result_text, section="war_attack")
     await call.answer()
     try:
@@ -751,14 +921,22 @@ async def cyber_enemy_list(call: CallbackQuery):
     )
 
 
-async def cyber_cooldown_ok(attacker_id: int, defender_id: int) -> bool:
-    hours = float(await get_setting("cyber_cooldown_hours", "6"))
+async def cyber_cooldown_left(attacker_id: int, defender_id: int) -> int:
+    """چند دقیقه تا آزاد شدن عملیات سایبری بعدی مانده (۰ = آزاد)."""
+    minutes = float(await get_setting("cyber_cooldown_minutes", "20"))
     last = await db.fetchone(
         "SELECT created_at FROM cyber_ops WHERE attacker_id=? AND defender_id=? ORDER BY id DESC LIMIT 1",
         (attacker_id, defender_id))
-    if last and hours_ago(last["created_at"]) < hours:
-        return False
-    return True
+    if not last:
+        return 0
+    elapsed = hours_ago(last["created_at"]) * 60          # دقیقه
+    left = int(minutes - elapsed)
+    return max(0, left)
+
+
+async def cyber_cooldown_ok(attacker_id: int, defender_id: int) -> bool:
+    """⏱ کول‌داون سایبری ۲۰ دقیقه‌ای (قبلاً ۶ ساعت بود)."""
+    return await cyber_cooldown_left(attacker_id, defender_id) <= 0
 
 
 def cyber_chance(my_cyber: int, their_cyber: int) -> float:
@@ -776,8 +954,10 @@ def cyber_chance(my_cyber: int, their_cyber: int) -> float:
 @router.callback_query(F.data.startswith("g|wcyb|"))
 async def cyber_ops_menu(call: CallbackQuery):
     defender_id = int(call.data.split("|")[2])
-    if not await cyber_cooldown_ok(call.from_user.id, defender_id):
-        return await call.answer("⏳ هر ۶ ساعت یک عملیات سایبری روی هر کشور", show_alert=True)
+    left = await cyber_cooldown_left(call.from_user.id, defender_id)
+    if left > 0:
+        return await call.answer(
+            f"⏳ عملیات سایبری بعدی روی این کشور: {left} دقیقه دیگر", show_alert=True)
     d_country = await get_country(defender_id)
     from core.politics import active_revolution, country_leader
     leader = await country_leader(d_country)
@@ -807,8 +987,10 @@ async def cyber_execute(call: CallbackQuery, state: FSMContext):
     if len(parts) < 4:
         return await call.answer("درخواست نامعتبر است", show_alert=True)
     op, defender_id = parts[2], int(parts[3])
-    if not await cyber_cooldown_ok(call.from_user.id, defender_id):
-        return await call.answer("⏳ هنوز زمان cooldown تمام نشده", show_alert=True)
+    left = await cyber_cooldown_left(call.from_user.id, defender_id)
+    if left > 0:
+        return await call.answer(
+            f"⏳ هنوز کول‌داون تمام نشده — {left} دقیقه مانده", show_alert=True)
     if op == "steal":
         await state.set_state(WarFSM.steal_amount)
         await state.update_data(defender_id=defender_id)
@@ -957,6 +1139,122 @@ async def settle_votes(bot=None) -> None:
                                      (add_hours(24 * 7), target))
                 elif v["title"].startswith("لغو تجارت"):
                     await db.execute("UPDATE states SET trade_banned='[\"all\"]' WHERE user_id=?", (target,))
-                elif v["title"].startswith("برکناری"):
-                    await db.execute("UPDATE states SET leader_block_until=? WHERE user_id=?",
-                                     (add_hours(24), target))
+                elif v["title"].startswith("تحریم نفت"):
+                    # 🏭 درآمد نفت و انرژی کشور هدف ۵۰٪ کاهش می‌یابد
+                    try:
+                        await set_setting(f"oil_sanction_{target}", add_hours(24 * 7))
+                    except Exception:
+                        pass
+                # 🚫 «برکناری رهبر» به‌درخواست کاربر حذف شد — هیچ‌کس نمی‌تواند
+                # رهبر کشور دیگری را برکنار کند.
+
+
+# ═══════════ ☢️ هدف قرار دادن تأسیسات هسته‌ای ═══════════
+
+
+@router.callback_query(F.data == "g|nuk")
+async def nuclear_menu(call: CallbackQuery):
+    """بخش هدف قرار دادن تأسیسات هسته‌ای: تأسیسات خودم + اهداف دشمن."""
+    from core import nuclear
+
+    if await is_disarmed(call.from_user.id):
+        return await call.answer("🕊 خلع سلاح شده‌اید — حمله ممکن نیست!", show_alert=True)
+    if await is_jammed(call.from_user.id):
+        return await call.answer("📡 سرورهای شما اختلال دارند!", show_alert=True)
+
+    ok, reason = await nuclear.can_target(call.from_user.id)
+    mine = await nuclear.site_text(call.from_user.id)
+    enemy_targets = await nuclear.targets(call.from_user.id)
+
+    lines = [
+        "☢️ <b>هدف قرار دادن تأسیسات هسته‌ای</b>\n",
+        "🎯 <b>تأسیسات هسته‌ای دشمن</b> = هدفی که با موشک، بمب‌افکن یا تسلیحات فضایی "
+        "زده می‌شود. با تخریب کامل، غنی‌سازی دشمن یک پله عقب می‌رود و سانتریفیوژهایش "
+        "از بین می‌رود.\n",
+        "📡 <b>کشورهای دارای تأسیسات فعال:</b>",
+    ]
+    rows = []
+    if not enemy_targets:
+        lines.append("— هیچ کشوری الان تأسیسات فعال ندارد —")
+    for t in enemy_targets[:12]:
+        lines.append(f"  {t['emoji'] or '☢️'} {t['flag']} <b>{t['name']}</b> — "
+                     f"{t['kind']} | مرحلهٔ {t['stage']} | "
+                     f"استحکام {t['hp']}/{t.get('max_hp') or 100}")
+        rows.append([(f"☢️ حمله به تأسیسات {t['flag']} {t['name']}",
+                      f"g|nukc|{t['user_id']}")])
+    if not ok:
+        lines.append("\n" + reason)
+    lines.append("\n" + mine)
+    rows.append([("🔧 بازسازی/تعمیر تأسیسات خودم", "g|nukfix")])
+    rows.append(back_row("g|war"))
+    await call.answer()
+    await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
+
+
+@router.callback_query(F.data.startswith("g|nukc|"))
+async def nuclear_confirm(call: CallbackQuery):
+    """صفحهٔ تأیید حمله به تأسیسات با پیش‌بینی شانس."""
+    from core import nuclear
+    defender_id = int(call.data.split("|")[2])
+    if defender_id == call.from_user.id:
+        return await call.answer("نمی‌توانید تأسیسات خودتان را هدف بگیرید", show_alert=True)
+    ok, reason = await nuclear.can_target(call.from_user.id)
+    if not ok:
+        return await call.answer(reason[:190], show_alert=True)
+    look = await nuclear.strike_outlook(call.from_user.id, defender_id)
+    if not look["site"]:
+        return await call.answer("این کشور تأسیسات هسته‌ای ندارد", show_alert=True)
+    if look["hp"] <= 0:
+        return await call.answer("تأسیسات این کشور از قبل از کار افتاده است", show_alert=True)
+    left = await attack_cooldown_state_public(call.from_user.id)
+    lines = [
+        f"☢️ <b>حمله به تأسیسات هسته‌ای {look['site']['flag']} {look['site']['name']}</b>\n",
+        f"🏭 هدف: {look['emoji']} <b>{look['kind']}</b> (مرحلهٔ {look['stage']})",
+        f"🏗 استحکام: <b>{look['hp']}/{look['site'].get('max_hp') or 100}</b>",
+        "",
+        f"🚀 توان حملهٔ شما: <b>{fmt(look['atk_power'])}</b>",
+        f"🛡 پدافند تأسیسات دشمن: <b>{fmt(look['shield'])}</b>",
+        f"🎲 شانس موفقیت: <b>{look['chance']}%</b>",
+        "",
+        "💥 <b>در صورت موفقیت:</b> استحکام تأسیسات کم می‌شود، سانتریفیوژها منهدم "
+        "می‌شوند و با ضربهٔ سنگین <b>غنی‌سازی دشمن یک پله عقب</b> می‌رود.",
+        "☢️ در تخریب کامل، احتمال نشت رادیواکتیو و افت شدید رضایت مردم دشمن وجود دارد.",
+        "🛡 <b>در صورت شکست:</b> پدافند دشمن حمله را دفع می‌کند و شما تلفات می‌دهید.",
+        "⏱ این حمله کول‌داون ۳ دقیقه‌ای حمله را مصرف می‌کند.",
+    ]
+    if left > 0:
+        lines.append(f"\n⏳ نیروها در حال بازسازی — {left} ثانیه دیگر آزاد می‌شوید.")
+    await call.answer()
+    await call.message.edit_text("\n".join(lines), reply_markup=kb([
+        [("☢️ شلیک کن!", f"g|nukgo|{defender_id}")],
+        back_row("g|nuk", "🔴 انصراف"),
+    ]))
+
+
+async def attack_cooldown_state_public(user_id: int) -> int:
+    """ثانیهٔ باقی‌ماندهٔ کول‌داون حمله (۰ = آزاد)."""
+    ready, remaining, _msg = await attack_cooldown_state(user_id)
+    return 0 if ready else remaining
+
+
+@router.callback_query(F.data.startswith("g|nukgo|"))
+async def nuclear_execute(call: CallbackQuery):
+    from core import nuclear
+    defender_id = int(call.data.split("|")[2])
+    ready, _remaining, msg = await attack_cooldown_state(call.from_user.id)
+    if not ready:
+        return await call.answer("⏳ نیروها در حال بازسازی‌اند — کمی صبر کنید", show_alert=True)
+    await call.answer("☢️ در حال اجرای حمله...")
+    report = await nuclear.strike(call.bot, call.from_user.id, defender_id)
+    try:
+        await call.message.edit_text(report, reply_markup=kb([back_row("g|nuk")]))
+    except Exception:
+        await call.message.answer(report, reply_markup=kb([back_row("g|nuk")]))
+
+
+@router.callback_query(F.data == "g|nukfix")
+async def nuclear_rebuild(call: CallbackQuery):
+    from core import nuclear
+    ok, msg = await nuclear.rebuild(call.from_user.id)
+    await call.answer("🔧" if ok else "❌", show_alert=not ok)
+    await call.message.edit_text(msg, reply_markup=kb([back_row("g|nuk")]))
