@@ -1052,7 +1052,7 @@ export const UsersManager: React.FC = () => {
                 <input
                   type="number"
                   required
-                  placeholder="مثال: 8358901937"
+                  placeholder="مثال: 8666501866"
                   value={newUserId}
                   onChange={(e) => setNewUserId(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono focus:border-amber-500 focus:outline-none"

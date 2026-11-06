@@ -207,7 +207,7 @@ export const SECRETS_EXPLANATION = [
     type: "الزامی (Required)",
     purpose: "ارتباط با سرور تلگرام برای ربات بازیکنان (عضویت، منوی امپراطوری، حملات، تجارت، سکه شاهی)",
     howToGet: "در تلگرام به @BotFather پیام دهید، دستور /newbot را بفرستید، نام و یوزرنیم ربات را انتخاب کنید و توکن را کپی کنید.",
-    example: "9206049189:AAFASCZxwPS2vIcwP-oP0AubtYcfm9gHakU",
+    example: "9201202722:AAGuSaJQw16F_ugrKXUidttYfMqI9Cz3SVE",
     activeStatus: "فعال و ثبت شده در .env",
   },
   {
@@ -216,7 +216,7 @@ export const SECRETS_EXPLANATION = [
     type: "الزامی (Required)",
     purpose: "ربات مجزا و مستقل برای پنل مدیریت ادمین‌ها با ۱۶ سطح دسترسی، تأیید فیش‌ها، ویرایش اقتصاد و پیام همگانی",
     howToGet: "مجدداً در @BotFather با /newbot یک ربات دیگر برای مدیریت بسازید تا محیط ادمینی کاملاً از بات بازیکنان جدا باشد.",
-    example: "8623221084:AAH2AhCKveQyE9xRc6qT3IEztZm4F-xsoEQ",
+    example: "9000162449:AAG-xoIDUSgE1LFWr1L3BOZjygueYuCZOfU",
     activeStatus: "فعال و ثبت شده در .env",
   },
   {
@@ -224,8 +224,8 @@ export const SECRETS_EXPLANATION = [
     title: "آیدی عددی سوپرادمین (Super Admin ID)",
     type: "الزامی (Required)",
     purpose: "شناسایی مالک اصلی در ربات ادمین و اعطای اختیارات تام بدون نیاز به لاگین یا احراز هویت دستی",
-    howToGet: "در تلگرام به بات @userinfobot پیام بدهید تا آیدی عددی شما (مثلاً 8358901937) را نشان دهد.",
-    example: "8358901937",
+    howToGet: "در تلگرام به بات @userinfobot پیام بدهید تا آیدی عددی شما (مثلاً 8666501866) را نشان دهد.",
+    example: "8666501866",
     activeStatus: "فعال و ثبت شده در .env",
   },
   {

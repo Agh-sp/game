@@ -133,7 +133,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="hidden lg:flex items-center gap-1 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-slate-300">
               <Shield className="w-3.5 h-3.5 text-blue-400" />
               <span>سوپرادمین:</span>
-              <span className="font-mono text-blue-300">{configuredSecrets?.SUPER_ADMIN_ID || '8358901937'}</span>
+              <span className="font-mono text-blue-300">{configuredSecrets?.SUPER_ADMIN_ID || '8666501866'}</span>
             </div>
           </div>
         </div>

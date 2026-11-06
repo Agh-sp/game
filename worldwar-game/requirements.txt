@@ -1,3 +1,6 @@
+# ربات‌های تلگرام (aiogram 3)
 aiogram>=3.7,<4
+# دیتابیس SQLite ناهمگام
 aiosqlite>=0.20
+# سرور وب پنل فرماندهی (جایگزین کامل Node/Express)
 aiohttp>=3.9
