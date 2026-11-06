@@ -170,7 +170,7 @@ async def join_keyboard() -> InlineKeyboardMarkup:
     except Exception:
         chans = []
     if not chans:
-        chans = ["@worldwarFIRE", "@worldwarfire_gp"]
+        chans = ["@WordWarWord", "@Jangjhani313"]
     rows = []
     for ch in chans:
         c_clean = str(ch).strip()
@@ -254,12 +254,12 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [("🏰 امپراطوری من", "g|emp")],
         [("🎯 ماموریت روزانه", "g|mis"), ("🪙 سکه شاهی", "g|coin")],
-        [("📢 کانال رسمی (@worldwarFIRE)", "https://t.me/worldwarFIRE", "url"), ("👥 گروه گفتگو (@worldwarfire_gp)", "https://t.me/worldwarfire_gp", "url")],
+        [("👥 گپ بازی (@WordWarWord)", "https://t.me/WordWarWord", "url"), ("📢 کانال خبری (@Jangjhani313)", "https://t.me/Jangjhani313", "url")],
         [("📖 راهنمای بازی", "g|guide"), ("🛟 پشتیبانی", "g|sup")],
         [("🔄 تغییر کشور", "g|cchg")],
     ]
     if is_admin:
-        rows.append([("🛡 پنل ادمین (@ADmminFIREWOrldBOT)", "https://t.me/ADmminFIREWOrldBOT", "url")])
+        rows.append([("🛡 پنل ادمین (@agfafagjganigagbot)", "https://t.me/agfafagjganigagbot", "url")])
     return kb(rows)
 
 

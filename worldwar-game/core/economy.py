@@ -337,24 +337,77 @@ async def get_progress(user_id: int) -> dict:
 # ─── اعلان کانال ───
 
 
+async def channel_target() -> str:
+    """کانال خبری فعلی بازی (تنظیم ادمین یا پیش‌فرض core/config.py)."""
+    from core import config as cfg
+    channel = await get_setting("announcement_channel", "")
+    return (channel or cfg.OFFICIAL_CHANNEL or "").strip()
+
+
+async def check_channel(bot) -> dict:
+    """بررسی سلامت کانال خبری: آیا ربات می‌تواند در آن پست بگذارد؟
+
+    خروجی: {"ok": bool, "channel": str, "error": str|None, "bot": str}
+    """
+    target = await channel_target()
+    result = {"ok": False, "channel": target, "error": None, "bot": ""}
+    if not target:
+        result["error"] = "کانال اعلانات تنظیم نشده است"
+        return result
+    try:
+        from core.images import get_channel_bot_username
+        result["bot"] = await get_channel_bot_username(bot)
+    except Exception:
+        pass
+    try:
+        me = await bot.get_me()
+        member = await bot.get_chat_member(chat_id=target, user_id=me.id)
+        status = getattr(member, "status", "")
+        if status not in ("administrator", "creator"):
+            result["error"] = (f"ربات @{me.username} در {target} ادمین نیست "
+                               f"(وضعیت: {status}) — آن را ادمین کانال کنید")
+            return result
+        result["ok"] = True
+    except Exception as exc:
+        result["error"] = f"دسترسی به {target} ممکن نیست: {exc}"
+    return result
+
+
 async def announce(bot, text: str, reply_markup=None,
                    section: str = "general", name: str = "") -> None:
-    """ارسال اعلان به کانال تنظیم‌شده، همراه با عکس همان بخش از کتابخانه تصاویر ادمین.
+    """ارسال اعلان/خبر به کانال تنظیم‌شده، همراه با عکس همان بخش از کتابخانه تصاویر.
 
     `section` یکی از کلیدهای core.images.IMAGE_SECTIONS است (war_declare، un، cyber، ...).
     اگر عکسی برای آن بخش ثبت نشده باشد، عکس «عمومی» و در نهایت فقط متن ارسال می‌شود.
     """
-    channel = await get_setting("announcement_channel", "")
+    from core import config as cfg
+    channel = await channel_target()
     if not channel:
         return
+    # نام بازی در ابتدای خبر (بدون تکرار اگر از قبل هست)
+    body = text if cfg.GAME_NAME in text else f"⚔️ <b>{cfg.GAME_NAME}</b>\n\n{text}"
+    if reply_markup is None:
+        try:
+            from core.images import channel_entry_markup, get_channel_bot_username
+            username = await get_channel_bot_username(bot)
+            if username:
+                reply_markup = channel_entry_markup(username)
+        except Exception:
+            reply_markup = None
     try:
         from core.images import send_with_image
-        await send_with_image(bot, channel, text, section, name, reply_markup=reply_markup)
+        await send_with_image(bot, channel, body, section, name, reply_markup=reply_markup)
     except Exception:
         try:
-            await bot.send_message(channel, text)
+            await bot.send_message(channel, body, reply_markup=reply_markup)
         except Exception:
             pass
+
+
+async def announce_news(bot, title: str, lines: list[str], section: str = "general") -> None:
+    """ارسال یک «خبر» استاندارد بازی به کانال (تیتر + خطوط)."""
+    body = f"<b>{title}</b>\n\n" + "\n".join(lines)
+    await announce(bot, body, section=section)
 
 
 # ─── تکمیل پروژه‌های تمام‌شده ───

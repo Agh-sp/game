@@ -40,17 +40,17 @@ async def cmd_start(message: Message, state: FSMContext):
         text = await get_setting("start_text", "")
         if not text:
             text = (
-                "🌍 <b>به بازی «جنگ جهانی» خوش آمدید!</b>\n\n"
-                "برای ورود به بازی در کانال و گروه رسمی زیر عضو شوید و سپس دکمه «🔍 بررسی عضویت» را بزنید:\n"
-                "📢 کانال رسمی: @worldwarFIRE\n"
-                "👥 ابرگروه بازی: @worldwarfire_gp"
+                "🌍 <b>به بازی «جنگ جهانی ۳» خوش آمدید!</b>\n\n"
+                "برای ورود به بازی در گروه و کانال رسمی زیر عضو شوید و سپس دکمه «🔍 بررسی عضویت» را بزنید:\n"
+                "👥 گپ بازی: @WordWarWord\n"
+                "📢 کانال خبری: @Jangjhani313"
             )
         return await send_home(message, text, reply_markup=await join_keyboard())
     if row["country_id"]:
         await bump_progress(user.id, "login")
         is_admin = bool(await db.fetchone("SELECT id FROM admins WHERE id=?", (user.id,)))
         return await send_home(message, 
-            f"🌍 به امپراطوری خود خوش آمدید، فرمانده!",
+            f"🌍 به امپراطوری خود خوش آمدید، فرمانده! (جنگ جهانی ۳)",
             reply_markup=main_menu_kb(is_admin),
         )
     await country_selection(message)
@@ -82,7 +82,7 @@ async def on_check(call: CallbackQuery, state: FSMContext):
     row = await db.fetchone("SELECT country_id FROM users WHERE id=?", (call.from_user.id,))
     if row and row["country_id"]:
         await bump_progress(call.from_user.id, "login")
-        await call.message.edit_text("🌍 به امپراطوری خود خوش آمدید، فرمانده!", reply_markup=main_menu_kb())
+        await call.message.edit_text("🌍 به امپراطوری خود خوش آمدید، فرمانده! (جنگ جهانی ۳)", reply_markup=main_menu_kb())
     else:
         await call.message.delete()
         await country_selection(call.message)
@@ -198,6 +198,20 @@ async def assign_country(user_id: int, country: dict, notify_text: str, bot=None
         "WHERE user_id=?",
         (currency, user_id)
     )
+    # 📰 خبر عمومی در کانال: کشوری فرمانده پیدا کرد
+    if bot:
+        try:
+            from core.config import GAME_NAME
+            from core.economy import announce
+            await announce(
+                bot,
+                f"🏳 <b>فرمانده جدید در {GAME_NAME}</b>\n\n"
+                f"{country['flag']} کشور <b>{country['name']}</b> توسط یک فرمانده جدید "
+                f"تحت کنترل گرفته شد.\n⏳ زمان حمله به آن آزاد است — سریع‌تر باشید!",
+                section="flag",
+            )
+        except Exception:
+            pass
     return True
 
 
@@ -225,7 +239,7 @@ async def take_free(call: CallbackQuery):
     if not c or c["owner_id"]:
         await call.answer("❌ این کشور پیش‌تر توسط بازیکن دیگری انتخاب شده است!", show_alert=True)
         return await country_mode_select(call)
-    ok = await assign_country(call.from_user.id, c, "")
+    ok = await assign_country(call.from_user.id, c, "", bot=call.bot)
     if not ok:
         await call.answer("❌ این کشور قبلاً گرفته شده است!", show_alert=True)
         return await country_mode_select(call)
@@ -248,7 +262,7 @@ async def buy_with_coins(call: CallbackQuery):
             f"🪙 سکه شاهی کافی ندارید! {fmt(need)} سکه کم دارید. از بخش «سکه شاهی» خرید کنید.",
             show_alert=True)
     await db.execute("UPDATE users SET royal_coins=royal_coins-? WHERE id=?", (c["coin_price"], user["id"]))
-    ok = await assign_country(user["id"], c, "")
+    ok = await assign_country(user["id"], c, "", bot=call.bot)
     if not ok:
         await db.execute("UPDATE users SET royal_coins=royal_coins+? WHERE id=?", (c["coin_price"], user["id"]))
         return await call.answer("❌ کشور گرفته شد! سکه‌ها برگشت داده شد.", show_alert=True)

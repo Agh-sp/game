@@ -1,4 +1,4 @@
-"""لایه دیتابیس: اتصال aiosqlite + اسکیمای کامل بازی جنگ جهانی."""
+"""لایه دیتابیس: اتصال aiosqlite + اسکیمای کامل بازی «جنگ جهانی ۳»."""
 import aiosqlite
 
 from core import seed
@@ -751,6 +751,17 @@ async def init_db() -> None:
             value = texts.GUIDE
         await db.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (key, value))
 
+    # ── کانال/گروه رسمی: مقادیر پیش‌فرض کد بر مقادیر قدیمیِ دیتابیس اولویت دارند ──
+    try:
+        from core.config import OFFICIAL_CHANNEL, OFFICIAL_CHANNELS, OFFICIAL_GROUP
+        await db.execute("UPDATE settings SET value=? WHERE key='join_channels'",
+                         (__import__("json").dumps(list(OFFICIAL_CHANNELS), ensure_ascii=False),))
+        await db.execute("UPDATE settings SET value=? WHERE key='announcement_channel'",
+                         (OFFICIAL_CHANNEL,))
+        await db.execute("UPDATE settings SET value=? WHERE key='game_group'", (OFFICIAL_GROUP,))
+    except Exception:
+        pass
+
     # مهاجرت مقدار قدیمی بودجه اولیه (۲۰۰) به مقیاس میلیونی (۲۰۰٫۰۰۰٫۰۰۰)
     try:
         row = await db.fetchone("SELECT value FROM settings WHERE key='initial_money'")
@@ -832,10 +843,10 @@ DEFAULT_SETTINGS = {
     "coins_to_money_rate": "5000000",     # نرخ تبدیل سکه شاهی به پول پایه
     "c2c_card": "6037-0000-0000-0000",    # شماره کارت به کارت
     "c2c_holder": "نام صاحب کارت",
-    "join_channels": '["@worldwarFIRE", "@worldwarfire_gp"]',  # کانال‌های عضویت اجباری
-    "announcement_channel": "@worldwarFIRE",                   # کانال اعلانات
-    "game_group": "@worldwarfire_gp",                          # ابرگروه بازی
-    "start_text": "🌍 به بازی «جنگ جهانی» خوش آمدید!\nبرای ورود به بازی در کانال‌ها و گروه‌های زیر عضو شوید و سپس دکمه «🔍 بررسی عضویت» را بزنید.",
+    "join_channels": '["@WordWarWord", "@Jangjhani313"]',      # کانال‌های عضویت اجباری (گپ + کانال خبری)
+    "announcement_channel": "@Jangjhani313",                   # کانال اعلانات/اخبار بازی
+    "game_group": "@WordWarWord",                              # گپ/ابرگروه رسمی بازی
+    "start_text": "🌍 به بازی «جنگ جهانی ۳» خوش آمدید!\nبرای ورود به بازی در کانال‌ها و گروه‌های زیر عضو شوید و سپس دکمه «🔍 بررسی عضویت» را بزنید.",
     "bot_off": "0",
     "trade_tax_percent": "5",
     "income_base": "100",
