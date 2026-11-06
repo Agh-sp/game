@@ -22,7 +22,7 @@ async def game_cancel(message: Message, state: FSMContext):
     await state.clear()
     user = await db.fetchone("SELECT country_id FROM users WHERE id=?", (message.from_user.id,))
     if user and user["country_id"]:
-        await send_home(message, "❌ عملیات لغو شد.", reply_markup=main_menu_kb())
+        await send_home(message, "❌ عملیات لغو شد.", reply_markup=await main_menu_kb())
     else:
         from gamebot.handlers.start import country_selection
         await send_home(message, "❌ عملیات لغو شد.")
@@ -44,7 +44,7 @@ async def main_menu(call: CallbackQuery, state: FSMContext):
             + (f"🎬 سیزن: {season}\n" if season else "")
             + server_line())
     is_admin = bool(await db.fetchone("SELECT id FROM admins WHERE id=?", (call.from_user.id,)))
-    await call.message.edit_text(text, reply_markup=main_menu_kb(is_admin))
+    await call.message.edit_text(text, reply_markup=await main_menu_kb(is_admin))
 
 
 @router.callback_query(F.data == "g|emp")

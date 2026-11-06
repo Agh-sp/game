@@ -466,7 +466,8 @@ E("gev", "game_events", "رویدادهای بازی", "📋", "logs", [
 SETTING_LABELS = {
     "coin_price_toman": "💵 قیمت هر سکه شاهی (تومان)",
     "coins_to_money_rate": "🔄 نرخ تبدیل سکه به پول پایه",
-    "c2c_card": "💳 شماره کارت به کارت",
+    "sales_support": "🛒 آیدی پشتیبانی فروش",
+    "c2c_card": "💳 شماره کارت به کارت (اختیاری)",
     "c2c_holder": "👤 نام صاحب کارت",
     "join_channels": "📢 کانال‌های عضویت اجباری (JSON)",
     "announcement_channel": "📣 کانال اعلانات",

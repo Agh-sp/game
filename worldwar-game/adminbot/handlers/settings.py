@@ -14,7 +14,7 @@ from core.utils import fmt
 
 router = Router()
 
-ORDER = ["coin_price_toman", "coins_to_money_rate", "c2c_card", "c2c_holder",
+ORDER = ["coin_price_toman", "coins_to_money_rate", "sales_support", "c2c_card", "c2c_holder",
          "join_channels", "announcement_channel", "start_text", "guide_text",
          "income_base", "initial_money", "income_interval_minutes", "food_price_per_ton",
          "trade_tax_percent", "war_vote_minutes",
@@ -31,7 +31,8 @@ ORDER = ["coin_price_toman", "coins_to_money_rate", "c2c_card", "c2c_holder",
 HELP = {
     "coin_price_toman": "قیمت فروش هر سکه شاهی به تومان (مثلاً 1000 یا 34000000)",
     "coins_to_money_rate": "هر سکه شاهی در تبدیل داخلی چند پول پایه می‌ارزد",
-    "c2c_card": "شماره کارت برای پرداخت‌های کارت به کارت",
+    "sales_support": "آیدی پشتیبانی فروش سکه شاهی — به‌جای کارت به کارت (مثل @MiddleEastDefendSupport)",
+    "c2c_card": "شماره کارت برای پرداخت‌های کارت به کارت — خالی بگذارید تا نمایش داده نشود",
     "c2c_holder": "نام صاحب کارت",
     "join_channels": "کانال‌های عضویت اجباری — JSON مثل [\"@channel1\",\"@group2\"] — خالی یعنی بدون عضویت اجباری",
     "announcement_channel": "کانال اعلانات (احداث/جنگ/بیانیه/رای‌گیری) مثل @mychannel — ربات باید ادمین کانال باشد",

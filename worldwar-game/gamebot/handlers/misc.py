@@ -85,78 +85,51 @@ async def mission_claim(call: CallbackQuery):
 # ─── سکه شاهی ───
 
 
-@router.callback_query(F.data == "g|coin")
-async def coins_menu(call: CallbackQuery):
-    user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))
-    price = int(await get_setting("coin_price_toman", "1000"))
-    rate = int(await get_setting("coins_to_money_rate", "5000000"))
-    card = await get_setting("c2c_card", "—")
-    holder = await get_setting("c2c_holder", "—")
+async def sales_support() -> str:
+    """آیدی پشتیبانی فروش سکه (از تنظیمات ادمین یا کانفیگ)."""
+    from core import config as cfg
+    return (await get_setting("sales_support", "") or cfg.SALES_SUPPORT).strip()
+
+
+async def coin_packages_text() -> str:
+    """فهرست قیمت پکیج‌های سکه شاهی."""
     packages = await db.fetchall("SELECT * FROM coin_packages WHERE is_active=1 ORDER BY coins")
-    pkg_lines = "\n".join(
+    if not packages:
+        return "📦 در حال حاضر پکیجی تعریف نشده است."
+    return "\n".join(
         f"📦 {fmt(p['coins'])} سکه — {fmt(p['price_toman'])} تومان"
         + (f" (تخفیف {round(p['discount_percent'])}٪)" if p["discount_percent"] else "")
         for p in packages)
+
+
+async def coin_shop_text(user: dict | None = None) -> str:
+    """متن فروشگاه سکه شاهی — فقط قیمت‌ها و آیدی پشتیبانی (بدون کارت و بدون دکمه)."""
+    from core import config as cfg
+    support = await sales_support()
+    handle = support if support.startswith("@") else f"@{support}"
+    link = f"https://t.me/{handle.lstrip('@')}"
+    lines = ["🪙 <b>سکه شاهی</b>", ""]
+    if user:
+        lines += [f"موجودی شما: <b>{fmt(user['royal_coins'])} سکه</b>", ""]
+    lines += [await coin_packages_text(), ""]
+    lines += [f"🛒 برای خرید به {handle} پیام بدید:", f'<a href="{link}">{handle}</a>']
+    lines.append("")
+    lines.append("💡 سکه شاهی برای: کشورهای ویژه، تجهیزات فضایی و ساختمان‌های خاص.")
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data == "g|coin")
+async def coins_menu(call: CallbackQuery):
+    user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))
     await call.answer()
-    await call.message.edit_text(
-        f"🪙 <b>سکه شاهی</b>\n\n"
-        f"موجودی شما: <b>{fmt(user['royal_coins'])} سکه</b>\n"
-        f"💵 قیمت هر سکه: <b>{fmt(price)} تومان</b>\n"
-        f"🔄 نرخ تبدیل به پول پایه: هر سکه = {fmt(rate)}\n\n"
-        f"💳 کارت به کارت:\n<code>{card}</code>\n👤 {holder}\n\n{pkg_lines}\n\n"
-        "سکه شاهی برای: کشورهای ویژه، تجهیزات فضایی و ساختمان‌های خاص.",
-        reply_markup=kb([
-            [("🛒 خرید سکه (سفارشی)", "g|coinbuy")],
-            [("📦 خرید پکیج", "g|coinpkg")],
-            [("🔄 تبدیل به پول پایه", "g|coinconv")],
-            [("🧾 فیش‌های من", "g|coinhist")],
-            back_row("g|main"),
-        ]),
-    )
+    await call.message.edit_text(await coin_shop_text(user), reply_markup=kb([]))
 
 
-@router.callback_query(F.data == "g|coinbuy")
-async def coins_buy(call: CallbackQuery, state: FSMContext):
-    await state.set_state(CoinFSM.amount)
-    await state.update_data(mode="buy")
-    price = int(await get_setting("coin_price_toman", "1000"))
+@router.callback_query(F.data.in_({"g|coinbuy", "g|coinpkg"}))
+async def coins_buy_redirect(call: CallbackQuery):
+    """خرید سکه فقط از طریق پشتیبانی انجام می‌شود (کارت به کارت حذف شد)."""
     await call.answer()
-    await call.message.edit_text(
-        f"🛒 <b>خرید سکه شاهی</b>\n\n💵 قیمت هر سکه: <b>{fmt(price)} تومان</b>\n\n"
-        "تعداد سکه مورد نظر را بنویسید (هر تعدادی که بخواهید):\n برای انصراف /cancel"
-    )
-
-
-@router.callback_query(F.data == "g|coinpkg")
-async def coins_packages(call: CallbackQuery):
-    packages = await db.fetchall("SELECT * FROM coin_packages WHERE is_active=1 ORDER BY coins")
-    rows = [[(f"📦 {fmt(p['coins'])} سکه — {fmt(p['price_toman'])} تومان", f"g|coinpkgo|{p['id']}")]
-            for p in packages]
-    rows.append(back_row("g|coin"))
-    await call.answer()
-    await call.message.edit_text("📦 <b>پکیج‌های سکه شاهی</b>\nپکیج را انتخاب کنید:", reply_markup=kb(rows))
-
-
-@router.callback_query(F.data.startswith("g|coinpkgo|"))
-async def package_receipt_flow(call: CallbackQuery, state: FSMContext):
-    pid = int(call.data.split("|")[2])
-    p = await db.fetchone("SELECT * FROM coin_packages WHERE id=? AND is_active=1", (pid,))
-    if not p:
-        return await call.answer("یافت نشد", show_alert=True)
-    from gamebot.handlers.start import CashFSM
-    card = await get_setting("c2c_card", "—")
-    holder = await get_setting("c2c_holder", "—")
-    await state.set_state(CashFSM.photo)
-    await state.update_data(kind="coins", coins=p["coins"], toman=p["price_toman"])
-    await call.answer()
-    await call.message.edit_text(
-        f"📦 <b>پکیج {fmt(p['coins'])} سکه شاهی</b>\n\n"
-        f"💰 مبلغ قابل پرداخت: <b>{fmt(p['price_toman'])} تومان</b>\n"
-        f"💳 شماره کارت: <code>{card}</code>\n👤 به نام: {holder}\n\n"
-        "مبلغ را کارت به کارت کنید و <b>عکس فیش</b> را ارسال کنید.\n"
-        "پس از تأیید ادمین سکه‌ها اضافه می‌شوند.\n برای انصراف /cancel",
-        reply_markup=kb([[("❌ انصراف", "g|cancel")]]),
-    )
+    await call.message.edit_text(await coin_shop_text(), reply_markup=kb([]))
 
 
 @router.message(CoinFSM.amount)
@@ -169,21 +142,9 @@ async def coins_amount_input(message: Message, state: FSMContext):
         return await send_home(message, "❌ عدد باید بین ۱ تا ۱میلیون باشد.")
     data = await state.get_data()
     if data.get("mode") == "buy":
-        price = int(await get_setting("coin_price_toman", "1000"))
-        total = amount * price
-        card = await get_setting("c2c_card", "—")
-        holder = await get_setting("c2c_holder", "—")
-        from gamebot.handlers.start import CashFSM
-        await state.set_state(CashFSM.photo)
-        await state.update_data(kind="coins", coins=amount, toman=total)
-        await send_home(message, 
-            f"🛒 سفارش <b>{fmt(amount)} سکه شاهی</b>\n\n"
-            f"💰 مبلغ قابل پرداخت: <b>{fmt(total)} تومان</b>\n"
-            f"💳 شماره کارت: <code>{card}</code>\n👤 به نام: {holder}\n\n"
-            "مبلغ را کارت به کارت کنید و <b>عکس فیش</b> را ارسال کنید.\n"
-            "پس از تأیید ادمین سکه‌ها اضافه می‌شوند.\n برای انصراف /cancel",
-            reply_markup=kb([[("❌ انصراف", "g|cancel")]]),
-        )
+        # خرید کارت به کارت حذف شده است — فقط پشتیبانی
+        await state.clear()
+        await send_home(message, await coin_shop_text())
     else:  # تبدیل به پول پایه
         rate = int(await get_setting("coins_to_money_rate", "5000000"))
         user = await db.fetchone("SELECT * FROM users WHERE id=?", (message.from_user.id,))
@@ -197,32 +158,11 @@ async def coins_amount_input(message: Message, state: FSMContext):
             f"✅ <b>{fmt(amount)} سکه شاهی</b> به <b>{fmt(amount * rate)}</b> پول پایه تبدیل شد.")
 
 
-@router.callback_query(F.data == "g|coinconv")
-async def coins_convert(call: CallbackQuery, state: FSMContext):
-    await state.set_state(CoinFSM.amount)
-    await state.update_data(mode="convert")
-    rate = int(await get_setting("coins_to_money_rate", "5000000"))
-    await call.answer()
-    await call.message.edit_text(
-        f"🔄 <b>تبدیل سکه شاهی به پول پایه</b>\n\nنرخ فعلی: هر سکه = <b>{fmt(rate)}</b>\n\n"
-        "تعداد سکه برای تبدیل را بنویسید:\n برای انصراف /cancel"
-    )
-
-
-@router.callback_query(F.data == "g|coinhist")
-async def coins_history(call: CallbackQuery):
-    receipts = await db.fetchall(
-        "SELECT * FROM receipts WHERE user_id=? ORDER BY id DESC LIMIT 10", (call.from_user.id,))
-    if not receipts:
-        await call.answer()
-        return await call.message.edit_text("🧾 فیشی ندارید.", reply_markup=kb([back_row("g|coin")]))
-    lines = ["🧾 <b>فیش‌های من</b>\n"]
-    for r in receipts:
-        status = {"pending": "⏳ در انتظار", "approved": "✅ تأیید شد", "rejected": "❌ رد شد"}[r["status"]]
-        what = (f"کشور (#{r['country_id']})" if r["kind"] == "country" else f"{fmt(r['coins'])} سکه")
-        lines.append(f"#{r['id']} — {what} — {fmt(r['toman'])} تومان — {status} — {tehran(r['created_at'])}")
-    await call.answer()
-    await call.message.edit_text("\n".join(lines), reply_markup=kb([back_row("g|coin")]))
+@router.callback_query(F.data.in_({"g|coinconv", "g|coinhist"}))
+async def coins_removed(call: CallbackQuery):
+    """بخش‌های تبدیل و فیش از منوی سکه شاهی حذف شده‌اند."""
+    await call.answer("این بخش در دسترس نیست", show_alert=False)
+    await call.message.edit_text(await coin_shop_text(), reply_markup=kb([]))
 
 
 # ─── پشتیبانی ───
@@ -333,5 +273,5 @@ async def photo_without_order(message: Message, state: FSMContext):
         "📸 عکس شما دریافت شد، اما هیچ سفارش فعالی برای ثبت فیش پیدا نشد.\n\n"
         "برای ثبت فیش: 🪙 <b>سکه شاهی</b> → خرید سکه/پکیج → سپس عکس فیش را بفرستید.\n"
         "برای خرید کشور هم از 🏳 <b>کشورهای ویژه</b> → پرداخت با پول واقعی اقدام کنید.",
-        reply_markup=main_menu_kb(),
+        reply_markup=await main_menu_kb(),
     )

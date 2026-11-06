@@ -51,7 +51,7 @@ async def cmd_start(message: Message, state: FSMContext):
         is_admin = bool(await db.fetchone("SELECT id FROM admins WHERE id=?", (user.id,)))
         return await send_home(message, 
             f"🌍 به امپراطوری خود خوش آمدید، فرمانده! (جنگ جهانی ۳)",
-            reply_markup=main_menu_kb(is_admin),
+            reply_markup=await main_menu_kb(is_admin),
         )
     await country_selection(message)
 
@@ -82,7 +82,7 @@ async def on_check(call: CallbackQuery, state: FSMContext):
     row = await db.fetchone("SELECT country_id FROM users WHERE id=?", (call.from_user.id,))
     if row and row["country_id"]:
         await bump_progress(call.from_user.id, "login")
-        await call.message.edit_text("🌍 به امپراطوری خود خوش آمدید، فرمانده! (جنگ جهانی ۳)", reply_markup=main_menu_kb())
+        await call.message.edit_text("🌍 به امپراطوری خود خوش آمدید، فرمانده! (جنگ جهانی ۳)", reply_markup=await main_menu_kb())
     else:
         await call.message.delete()
         await country_selection(call.message)
@@ -319,7 +319,7 @@ async def set_onboard_rel(call: CallbackQuery):
         f"✅ دین رسمی: <b>{r['name']}</b>\n"
         "✅ ذخیره منابع پایه: ۱,۰۰۰ واحد مصالح، ۵,۰۰۰ واحد برق، ۵,۰۰۰ واحد آب و گاز به خزانه شما اضافه شد.\n\n"
         "فرمانده، اکنون وارد مرکز فرماندهی امپراطوری شوید 🌍",
-        reply_markup=main_menu_kb(is_admin),
+        reply_markup=await main_menu_kb(is_admin),
     )
 
 
@@ -330,21 +330,18 @@ async def buy_with_cash(call: CallbackQuery, state: FSMContext):
     if not c or c["owner_id"]:
         await call.answer("❌ این کشور پیش‌تر توسط بازیکن دیگری انتخاب شده است!", show_alert=True)
         return await country_mode_select(call)
-    card = await get_setting("c2c_card", "—")
-    holder = await get_setting("c2c_holder", "—")
-    await state.set_state(CashFSM.photo)
-    await state.update_data(kind="country", country_id=cid)
-    await call.message.edit_text(
-        f"💳 <b>خرید {c['flag']} {c['name']} با پول واقعی</b>\n\n"
-        f"💰 مبلغ قابل پرداخت: <b>{fmt(c['toman_price'])} تومان</b>\n"
-        f"💳 شماره کارت: <code>{card}</code>\n"
-        f"👤 به نام: {holder}\n\n"
-        "مبلغ را کارت به کارت کنید و <b>عکس فیش</b> را همین‌جا ارسال کنید.\n"
-        "پس از تأیید ادمین، حکومت و دین تعیین شده و کشور به شما واگذار می‌شود.\n\n"
-        "برای بازگشت به لیست کشورها دکمه زیر را بزنید:",
-        reply_markup=kb([[("🔴 انصراف و بازگشت به انتخاب کشور", "g|cancel")]]),
-    )
+    from core import config as cfg
+    support = (await get_setting("sales_support", "") or cfg.SALES_SUPPORT).strip()
+    handle = support if support.startswith("@") else f"@{support}"
+    link = f"https://t.me/{handle.lstrip('@')}"
     await call.answer()
+    await call.message.edit_text(
+        f"👑 <b>خرید {c['flag']} {c['name']}</b>\n\n"
+        f"💰 مبلغ: <b>{fmt(c['toman_price'])} تومان</b>\n\n"
+        f"🛒 برای خرید به {handle} پیام بدید:\n"
+        f'<a href="{link}">{handle}</a>',
+        reply_markup=kb([[("🔴 بازگشت به انتخاب کشور", "g|cancel")]]),
+    )
 
 
 @router.callback_query(F.data == "g|cancel")
@@ -353,7 +350,7 @@ async def cancel_flow(call: CallbackQuery, state: FSMContext):
     await call.answer("🔴 عملیات لغو شد")
     user = await db.fetchone("SELECT country_id FROM users WHERE id=?", (call.from_user.id,))
     if user and user["country_id"]:
-        await call.message.edit_text("❌ عملیات لغو شد.", reply_markup=main_menu_kb())
+        await call.message.edit_text("❌ عملیات لغو شد.", reply_markup=await main_menu_kb())
     else:
         # وقتی هنوز کشوری ندارد یا خرید را لغو کرد، مستقیماً به کشورگیری بازگردد نه امپراطوری من!
         await country_mode_select(call)
@@ -373,7 +370,7 @@ async def cash_receipt(message: Message, state: FSMContext):
         await send_home(message, 
             "🧾 فیش شما ثبت شد و برای <b>ادمین</b> ارسال شد.\n"
             "پس از تأیید، کشور به شما واگذار می‌شود. 🙏",
-            reply_markup=main_menu_kb(),
+            reply_markup=await main_menu_kb(),
         )
     else:  # خرید سکه
         await db.execute(
@@ -383,7 +380,7 @@ async def cash_receipt(message: Message, state: FSMContext):
         await send_home(message, 
             "🧾 فیش شما ثبت شد و برای <b>ادمین</b> ارسال شد.\n"
             f"پس از تأیید، 🪙 <b>{fmt(data.get('coins', 0))} سکه شاهی</b> به حساب شما اضافه می‌شود. 🙏",
-            reply_markup=main_menu_kb(),
+            reply_markup=await main_menu_kb(),
         )
 
 

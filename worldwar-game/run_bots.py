@@ -15,6 +15,23 @@ import os
 import signal
 import sys
 
+
+def _purge_stale_bytecode() -> int:
+    """حذف فایل‌های .pyc کهنه تا کد قدیمی کش نشود (باگ «هنوز worldwarFIRE می‌بینم»)."""
+    import pathlib
+    import shutil
+    removed = 0
+    root = pathlib.Path(__file__).resolve().parent
+    for cache in root.rglob("__pycache__"):
+        if any(part in {".venv", "venv", "site-packages"} for part in cache.parts):
+            continue
+        shutil.rmtree(cache, ignore_errors=True)
+        removed += 1
+    return removed
+
+
+_PURGED = _purge_stale_bytecode()
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
@@ -69,6 +86,7 @@ def _remove_pid() -> None:
 
 
 async def run() -> None:
+    log.info("🧹 %d پوشهٔ بایت‌کد کهنه پاک شد (اجرای کد تازه)", _PURGED)
     await init_db()
     _write_pid()
     from core.keepalive import start_keepalive
