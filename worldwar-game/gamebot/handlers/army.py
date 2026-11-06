@@ -162,6 +162,7 @@ def barracks_rows() -> list:
     return [
         [("📋 تجهیزات و سربازان من", "g|eq")],
         [("🛒 خرید تجهیزات", "g|eqshop")],
+        [("🧱 خرید مصالح ساختمانی", "g|matshop")],
         [("🎓 تعلیم سرباز", "g|train")],
         back_row("g|army"),
     ]

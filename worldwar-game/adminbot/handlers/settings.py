@@ -14,9 +14,14 @@ from core.utils import fmt
 
 router = Router()
 
-ORDER = ["coin_price_toman", "coins_to_money_rate", "sales_support", "c2c_card", "c2c_holder",
+ORDER = ["coin_price_toman", "coin_sell_rate", "coins_to_money_rate", "sales_support", "c2c_card", "c2c_holder",
          "join_channels", "announcement_channel", "start_text", "guide_text",
-         "income_base", "initial_money", "income_interval_minutes", "food_price_per_ton",
+         "income_base", "initial_money", "income_interval_minutes",
+         "income_tax_base_m", "income_tax_step_m", "income_oil_unit_m",
+         "income_strait_m", "income_growth_cap",
+         "attack_cooldown_minutes", "alliance_defense_percent", "alliance_max_members",
+         "material_unit_price",
+         "food_price_per_ton",
          "trade_tax_percent", "war_vote_minutes",
          "vote_duration_hours", "country_change_hours", "cyber_cooldown_hours", "bot_off",
          "sec_negotiation", "sec_direct_trade", "sec_rescue_sale", "sec_straits",
@@ -29,6 +34,7 @@ ORDER = ["coin_price_toman", "coins_to_money_rate", "sales_support", "c2c_card",
          "season_vote_hours", "season_required_votes", "daily_report_hour"]
 
 HELP = {
+    "coin_sell_rate": "💰 پول پایه‌ای که بازیکن بابت فروش هر ۱ سکه شاهی می‌گیرد (مثلاً 100000000)",
     "coin_price_toman": "قیمت فروش هر سکه شاهی به تومان (مثلاً 1000 یا 34000000)",
     "coins_to_money_rate": "هر سکه شاهی در تبدیل داخلی چند پول پایه می‌ارزد",
     "sales_support": "آیدی پشتیبانی فروش سکه شاهی — به‌جای کارت به کارت (مثل @MiddleEastDefendSupport)",
@@ -38,6 +44,15 @@ HELP = {
     "announcement_channel": "کانال اعلانات (احداث/جنگ/بیانیه/رای‌گیری) مثل @mychannel — ربات باید ادمین کانال باشد",
     "start_text": "متن خوش‌آمد /start قبل از بررسی عضویت",
     "guide_text": "متن کامل راهنمای بازی که در بخش «راهنمای بازی» نمایش داده می‌شود",
+    "income_tax_base_m": "💰 پایهٔ درآمد مالیات هر دوره به میلیون (پیش‌فرض ۱۰)",
+    "income_tax_step_m": "💰 به ازای هر واحد ضریب اقتصاد کشور چند میلیون اضافه شود (پیش‌فرض ۸)",
+    "income_oil_unit_m": "🛢 ضریب تبدیل پایهٔ نفتی کشور به پول میلیونی (پیش‌فرض ۱)",
+    "income_strait_m": "⚓ عوارض هر تنگه برای مالکش به میلیون (پیش‌فرض ۱۴)",
+    "income_growth_cap": "📈 سقف ضریب ارتقای درآمد (پیش‌فرض ۳ برابر)",
+    "attack_cooldown_minutes": "⏳ فاصله بین دو حمله نظامی به دقیقه (پیش‌فرض ۳)",
+    "alliance_defense_percent": "🤝 درصد توان دفاعی که هر متحد اضافه می‌کند (پیش‌فرض ۳۰)",
+    "alliance_max_members": "🤝 حداکثر اعضای هر اتحاد (پیش‌فرض ۸)",
+    "material_unit_price": "🧱 قیمت هر واحد مصالح ساختمانی (پیش‌فرض ۲۰۰۰۰)",
     "income_base": "ضریب درآمد روزانه کشورها (پیش‌فرض ۱۰۰) — درآمد = (جمعیت÷۱۰۰۰) × این ضریب × ضریب رضایت × (۱+نرخ مالیات)",
     "initial_money": "بودجه اولیه هر بازیکن تازه‌وارد، به واحد پول پایهٔ بازی — پیش‌فرض ۲۰۰ (با /start اعمال می‌شود و در ریست بازیکنان هم استفاده می‌شود)",
     "war_vote_minutes": "مدت رای‌گیری مجوز جنگ در سازمان ملل (دقیقه — پیش‌فرض ۳۰)",

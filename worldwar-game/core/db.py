@@ -292,6 +292,68 @@ CREATE TABLE IF NOT EXISTS un_ballots (
   PRIMARY KEY (vote_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS coin_sales (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  coins INTEGER DEFAULT 0,
+  rate INTEGER DEFAULT 0,
+  gain INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS provinces (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  country_id INTEGER NOT NULL,
+  idx INTEGER NOT NULL,
+  name TEXT DEFAULT '',
+  owner_id INTEGER,
+  captured_at TEXT,
+  UNIQUE(country_id, idx)
+);
+
+CREATE TABLE IF NOT EXISTS provinces_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  province_id INTEGER,
+  from_owner INTEGER,
+  to_owner INTEGER,
+  war_id INTEGER,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS alliances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT DEFAULT '',
+  leader_id INTEGER,
+  status TEXT DEFAULT 'active',
+  founded_at TEXT DEFAULT (datetime('now')),
+  dissolved_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS alliance_members (
+  alliance_id INTEGER,
+  user_id INTEGER,
+  role TEXT DEFAULT 'member',
+  joined_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY(alliance_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS alliance_invites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  alliance_id INTEGER,
+  inviter_id INTEGER,
+  invitee_id INTEGER,
+  status TEXT DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS enrichment (
+  user_id INTEGER PRIMARY KEY,
+  stage INTEGER DEFAULT 0,
+  started_at TEXT,
+  completes_at TEXT,
+  centrifuges INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS wars (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   attacker_id INTEGER,
@@ -594,6 +656,9 @@ async def _add_column(table: str, column: str, decl: str) -> None:
 
 
 MIGRATIONS = [
+    ("states", "last_attack_at", "TEXT"),
+    ("countries", "province_count", "INTEGER DEFAULT 5"),
+    ("countries", "collapsed", "INTEGER DEFAULT 0"),
     ("states", "oil_stock", "INTEGER DEFAULT 0"),
     ("states", "energy", "INTEGER DEFAULT 5000"),
     ("states", "water", "INTEGER DEFAULT 5000"),
@@ -820,6 +885,13 @@ async def init_db() -> None:
     # یکپارچه‌سازی مالکیت کشورها با کاربران (مالکیت دوگانه، مالک بی‌کاربر و ...)
     await sync_country_owners()
 
+    # 🗺 ساخت ۵ استان پایه برای هر کشور (idempotent)
+    try:
+        from core.provinces import ensure_provinces
+        await ensure_provinces()
+    except Exception:
+        pass
+
 
 async def sync_country_owners() -> None:
     """هم‌ترازکردن countries.owner_id با users.country_id.
@@ -873,6 +945,7 @@ async def sync_country_owners() -> None:
 
 
 DEFAULT_SETTINGS = {
+    "coin_sell_rate": "100000000",   # پول پایه‌ای که بابت فروش هر سکه به بازیکن داده می‌شود
     "coin_price_toman": "1000",           # قیمت هر سکه شاهی به تومان
     "coins_to_money_rate": "5000000",     # نرخ تبدیل سکه شاهی به پول پایه
     "sales_support": "@MiddleEastDefendSupport",  # آیدی پشتیبانی فروش (جای کارت به کارت)
@@ -896,7 +969,20 @@ DEFAULT_SETTINGS = {
     "special_toman_multiplier": "100000",
     "guide_text": "",
     # ── درآمد خودکار ۳۰ دقیقه‌ای ──
-    "income_interval_minutes": "30",
+    "income_interval_minutes": "5",
+    # ─── موتور درآمد میلیونی (core/income.py) ───
+    "income_tax_base_m": "10",        # پایهٔ مالیات هر دوره (میلیون)
+    "income_tax_step_m": "8",         # به ازای هر واحد ضریب اقتصاد کشور (میلیون)
+    "income_oil_unit_m": "1",         # ضریب oil_income_base → پول (میلیون)
+    "income_strait_m": "14",          # عوارض هر تنگه برای مالک (میلیون)
+    "income_growth_cap": "3",         # سقف ضریب ارتقا
+    # ─── نبرد و استان‌ها ───
+    "attack_cooldown_minutes": "3",   # فاصله بین دو حمله
+    "province_defense_min_chance": "10",
+    "province_defense_max_chance": "70",
+    # ─── اتحاد ───
+    "alliance_defense_percent": "30",
+    "alliance_max_members": "8",
     # ── بخش‌ها (روشن/خاموش) 1=روشن ──
     "sec_negotiation": "1",
     "sec_direct_trade": "1",

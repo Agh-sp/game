@@ -526,8 +526,41 @@ class _MessageCall:
         pass
 
 
+async def attack_cooldown_state(user_id: int) -> tuple[bool, int, str]:
+    """آیا بازیکن می‌تواند حمله کند؟ → (آماده، ثانیه باقی‌مانده، متن خطا)"""
+    minutes = 3.0
+    try:
+        minutes = max(0.0, float(await get_setting("attack_cooldown_minutes", "3")))
+    except (TypeError, ValueError):
+        minutes = 3.0
+    if minutes <= 0:
+        return True, 0, ""
+    row = await db.fetchone("SELECT last_attack_at FROM states WHERE user_id=?", (user_id,))
+    last = (row or {}).get("last_attack_at")
+    if not last:
+        return True, 0, ""
+    from core.utils import now as _now, parse as _parse
+    try:
+        then = _parse(last)
+        if then is None:
+            return True, 0, ""
+        elapsed = (_now() - then).total_seconds()
+    except Exception:
+        return True, 0, ""
+    remaining = int(minutes * 60 - elapsed)
+    if remaining <= 0:
+        return True, 0, ""
+    m, sec = divmod(remaining, 60)
+    return False, remaining, (f"⏳ <b>نیروهای شما در حال بازسازی هستند</b>\n\n"
+                              f"⏱ زمان باقی‌مانده: <b>{m}:{sec:02d}</b>\n"
+                              "پس از این مدت می‌توانید دوباره حمله کنید.")
+
+
 @router.callback_query(F.data == "g|wgo")
 async def attack_go(call: CallbackQuery, state: FSMContext):
+    ready, _remaining, msg = await attack_cooldown_state(call.from_user.id)
+    if not ready:
+        return await call.answer("⏳ نیروها در حال بازسازی‌اند — کمی صبر کنید", show_alert=True)
     data = await state.get_data()
     plan = data.get("plan", {})
     war = await db.fetchone("SELECT * FROM wars WHERE id=? AND attacker_id=? AND status='active'",
@@ -712,6 +745,30 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         extra_lines.append(infrastructure_damage.strip())
     extra_lines.append(f"🎯 نوع عملیات: {atype_fa}")
 
+    # 🗺 استان‌ها: هر پیروزی یک استان می‌گیرد و ممکن است کشور سقوط کند
+    province_line = ""
+    try:
+        from core import provinces as prov
+        province_line = await prov.battle_province_effect(
+            call.bot, attacker_id, defender_id,
+            attacker_power=atk_power, defender_power=d_def,
+            won=won, war_id=war.get("id"))
+    except Exception:
+        log.exception("province effect failed")
+    if province_line:
+        extra_lines.append(province_line.strip())
+
+    # 🛡 کمک دفاعی متحدان (اتحاد)
+    try:
+        from core import alliances as al
+        bonus = await al.defense_bonus(defender_id)
+        if bonus["bonus"] > 0 and won:
+            extra_lines.append(
+                f"🤝 متحدان مدافع وارد شدند: {len(bonus['allies'])} متحد با "
+                f"{bonus['percent']}٪ توان دفاعی")
+    except Exception:
+        pass
+
     result_text = combat.battle_report(
         strat=dict(strat, name=f"{strat['name']} ({atype_fa.strip()})"),
         atk_country=a_country, def_country=d_country,
@@ -720,6 +777,14 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         atk_units=atk_lost_units, def_units=def_lost_units,
         atk_ratio=atk_loss, def_ratio=def_loss,
         extra_lines=extra_lines, title=f"گزارش نبرد {atype_fa}")
+
+    # ⏳ ثبت زمان حمله برای کول‌داون ۳ دقیقه‌ای
+    try:
+        await db.execute(
+            "UPDATE states SET last_attack_at=? WHERE user_id=?", (iso(), attacker_id))
+    except Exception:
+        pass
+
     await announce(call.bot, result_text, section="war_attack")
     await call.answer()
     try:

@@ -44,9 +44,9 @@ def create_dispatcher() -> Dispatcher:
     dp.errors.register(_global_error_handler)
     dp.startup.register(_on_startup)
     from gamebot.handlers import (start, adminpanel, menu, people, projects, army, gov, war,
-                                  un, misc, trade, oil, rescue, politics)
+                                  un, misc, trade, oil, rescue, politics, materials, world)
     for r in (start, adminpanel, menu, people, projects, army, gov, politics, war, un, misc,
-              trade, oil, rescue):
+              trade, oil, rescue, materials, world):
         dp.include_router(r.router)
     # روتر گفتگوی مذاکره باید آخرین باشد تا FSMهای دیگر اولویت داشته باشند
     dp.include_router(trade.neg_router)
