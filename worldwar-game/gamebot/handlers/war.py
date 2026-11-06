@@ -874,6 +874,30 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         outcome = f"🛡 <b>{d_country['name']} حمله را دفع کرد</b> — مالکیت و استان‌ها دست‌نخورده ماند."
     extra_lines.insert(0, outcome)
 
+    # 🗺 استان‌ها: هر پیروزی یک استان می‌گیرد و ممکن است کشور سقوط کند
+    province_line = ""
+    try:
+        from core import provinces as prov
+        province_line = await prov.battle_province_effect(
+            call.bot, attacker_id, defender_id,
+            attacker_power=atk_power, defender_power=d_def,
+            won=won, war_id=war.get("id"))
+    except Exception:
+        log.exception("province effect failed")
+    if province_line:
+        extra_lines.append(province_line.strip())
+
+    # 🛡 کمک دفاعی متحدان (اتحاد)
+    try:
+        from core import alliances as al
+        bonus = await al.defense_bonus(defender_id)
+        if bonus["bonus"] > 0 and won:
+            extra_lines.append(
+                f"🤝 متحدان مدافع وارد شدند: {len(bonus['allies'])} متحد با "
+                f"{bonus['percent']}٪ توان دفاعی")
+    except Exception:
+        pass
+
     result_text = combat.battle_report(
         strat=dict(strat, name=f"{strat['name']} ({atype_fa.strip()})"),
         atk_country=a_country, def_country=d_country,
