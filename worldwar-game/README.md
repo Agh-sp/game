@@ -11,12 +11,18 @@
 
 ## ⚡️ راه‌اندازی (۵ دقیقه)
 
-### ۱) ساخت دو ربات
-در تلگرام به [@BotFather](https://t.me/BotFather) پیام بدهید و با `/newbot` **دو ربات** بسازید:
-- یکی برای بازی اصلی (مثلاً `WWGame_bot`)
-- یکی برای پنل ادمین (مثلاً `WWAdmin_bot`)
+### ۱) توکن ربات‌ها (از قبل ثبت شده) ✅
+توکن‌ها و آیدی ادمین کل از قبل داخل کد هستند و **نیازی به ساخت ربات جدید یا فایل `.env` نیست**:
 
-توکن هر دو را نگه دارید.
+| ربات | توکن |
+|---|---|
+| 🎮 ربات بازی | `9201202722:AAGuSaJQw16F_ugrKXUidttYfMqI9Cz3SVE` |
+| 🛡 ربات ادمین | `9000162449:AAG-xoIDUSgE1LFWr1L3BOZjygueYuCZOfU` |
+| 👑 آیدی ادمین کل | `8666501866` |
+
+این مقادیر در `core/config.py` (`DEFAULT_GAME_BOT_TOKEN`، `DEFAULT_ADMIN_BOT_TOKEN`،
+`DEFAULT_ADMIN_ID`) ثبت شده‌اند. برای تغییرشان فقط `.env.example` را به `.env`
+کپی کنید یا از پنل وب (تب سکرت‌ها) استفاده کنید.
 
 ### ۲) نصب
 ```bash
@@ -25,24 +31,35 @@ pip install -r requirements.txt
 ```
 (نیازمند Python 3.10 یا بالاتر)
 
-### ۳) تنظیمات
-فایل `.env.example` را به `.env` تغییر نام دهید و پر کنید:
-```env
-GAME_BOT_TOKEN=123456:AAA-توکن-ربات-اصلی
-ADMIN_BOT_TOKEN=123456:AAA-توکن-ربات-ادمین
-SUPER_ADMIN_ID=آیدی-عددی-شما
-```
-💡 برای گرفتن آیدی عددی خود به [@userinfobot](https://t.me/userinfobot) پیام بدهید.
-
-### ۴) اجرا
+### ۳) تنظیمات اختیاری
+اگر خواستید توکن‌ها/آیدی را از کد جدا کنید:
 ```bash
-# اجرای هر دو ربات با هم (پیشنهادی):
-python3 run_all.py
+cp .env.example .env
+```
+```env
+GAME_BOT_TOKEN=9201202722:AAGuSaJQw16F_ugrKXUidttYfMqI9Cz3SVE
+ADMIN_BOT_TOKEN=9000162449:AAG-xoIDUSgE1LFWr1L3BOZjygueYuCZOfU
+SUPER_ADMIN_ID=8666501866
+```
 
+### ۴) اجرا (کاملاً پایتونی)
+```bash
+# پنل فرماندهی وب + هر دو ربات در یک دستور:
+python3 ../server.py          # از ریشهٔ پروژه
+# یا:
+python3 run_all.py            # پنل وب روی http://0.0.0.0:3000
+
+# فقط ربات‌ها (بدون پنل وب):
+python3 run_bots.py
 # یا جداگانه در دو پروسه/سرور:
 python3 run_game.py     # فقط ربات اصلی
 python3 run_admin.py    # فقط ربات ادمین
+
+# پنل وب به‌تنهایی:
+python3 web.py --web-only
 ```
+
+پنل فرماندهی: `http://SERVER_IP:3000` — وضعیت سلامت: `/health`.
 
 دفعات اول، دیتابیس `wwgame.db` خودکار ساخته و با داده‌های اولیه پر می‌شود:
 **۴۵ کشور واقعی، ۴۶ تجهیزات نظامی (۶ دسته شامل 🚀 موشکی)، ۳۸ ساختمان/پروژه، ۱۰ قانون، ۶ دین، ۶ حکومت، ۷ ماموریت روزانه، ۴ پکیج سکه**.
@@ -130,7 +147,15 @@ python3 run_admin.py    # فقط ربات ادمین
 worldwar-game/
 ├── .env.example        ← به .env تغییر نام دهید
 ├── requirements.txt
-├── run_all.py          ← اجرای هر دو ربات
+├── run_all.py          ← اجرای پنل وب + هر دو ربات
+├── run_bots.py         ← فقط ربات‌ها (پروسهٔ مدیریت‌شده توسط پنل)
+├── web.py              ← فقط پنل فرماندهی وب
+├── webapp/             ← سرور وب پایتونی (جایگزین server.ts)
+│   ├── server.py       (aiohttp: همهٔ APIها، وبهوک، سلامت)
+│   ├── config_service.py
+│   ├── process_manager.py
+│   ├── data_service.py
+│   └── game_meta.py
 ├── run_game.py         ← فقط ربات اصلی
 ├── run_admin.py        ← فقط ربات ادمین
 ├── core/               ← هسته مشترک
@@ -270,7 +295,7 @@ FIREBASE_AUTH=your-database-secret-or-token
 
 ### 👑 سوپرادمین‌های ثابت
 
-- آیدی‌های `8666501866` و `8358901937` در `core/config.py` (`DEFAULT_SUPER_ADMIN_IDS`) ثبت شده‌اند و در هر راه‌اندازی به‌صورت خودکار با `is_super=1` و **همهٔ ۱۶ مجوز** (`perms = ALL_PERMS`) در جدول `admins` درج می‌شوند → دسترسی کامل به ربات بازی (`/panel`) و ربات ادمین، حتی بدون تنظیم `.env`.
+- آیدی `8666501866` (ادمین کل) در `core/config.py` (`DEFAULT_SUPER_ADMIN_IDS` / `DEFAULT_ADMIN_ID`) ثبت شده است و در هر راه‌اندازی به‌صورت خودکار با `is_super=1` و **همهٔ ۱۶ مجوز** (`perms = ALL_PERMS`) در جدول `admins` درج می‌شوند → دسترسی کامل به ربات بازی (`/panel`) و ربات ادمین، حتی بدون تنظیم `.env`.
 - افزودن آیدی بیشتر: `SUPER_ADMIN_IDS=111111111,222222222` در `.env` (سازگار با `SUPER_ADMIN_ID` قبلی).
 - ماژول مشترک: `core/admins.py` (`is_admin`، `is_super_admin`، `ensure_super_admins`).
 
@@ -298,8 +323,21 @@ python3 run_webhook.py --delete-webhook
 
 - 🔐 اگر `WEBHOOK_SECRET` تنظیم شود، هر درخواست باید هدر `X-Telegram-Bot-Api-Secret-Token` درست داشته باشد وگرنه `403` می‌گیرد.
 - ♻️ در این حالت هوک‌های startup (زمان‌بند درآمد، رأی‌گیری و…) هم اجرا می‌شوند؛ یعنی همه‌چیز مثل polling کار می‌کند.
-- 💓 **پینگ بیدارباش**: سرویس Node هر `KEEPALIVE_MINUTES` (پیش‌فرض **۱۰ دقیقه**) یک درخواست فیک به `${WEBAPP_URL یا آدرس عمومی}/health` می‌زند تا سرویس خواب نرود. وضعیتش در `/health` و `/api/keepalive` دیده می‌شود.
+- 💓 **پینگ بیدارباش**: سرور پایتونی هر `KEEPALIVE_MINUTES` (پیش‌فرض **۱۰ دقیقه**) یک درخواست فیک به `${WEBAPP_URL یا آدرس عمومی}/health` می‌زند تا سرویس خواب نرود. وضعیتش در `/health` و `/api/keepalive` دیده می‌شود.
 - 🎛 از پنل وب: `GET /api/keepalive`، `POST /api/keepalive/ping`، `POST /api/keepalive {enabled, intervalMinutes}`، `GET /api/webhook/status`، `POST /api/webhook/set {baseUrl}`، `POST /api/webhook/delete`، `POST /api/webhook/mode {mode:"webhook"|"polling", baseUrl}`.
 
+### ☁️ میزبانی روی PythonAnywhere (وب‌هوک)
+روی هاست‌های WSGI (مثل PythonAnywhere) نه polling ممکن است نه پروسهٔ دائمی؛ برای همین
+`webapp/paw_wsgi.py` یک اپلیکیشن WSGI آماده است که آپدیت‌های تلگرام را مستقیم به
+Dispatcher ها می‌دهد و کارهای دوره‌ای (درآمد، نفت، انقلاب، رأی‌گیری) را در هر درخواست
+با محدودیت یک‌دقیقه‌ای اجرا می‌کند.
+
+```bash
+python3 paw_start.py --base-url https://USERNAME.pythonanywhere.com   # ثبت وبهوک + استارت
+```
+
+مسیرهای سرویس: `/health`، `/info`، `/setup`، `/panel`، `/webhook/game`، `/webhook/admin`.
+راهنمای کامل: `../DEPLOY_PYTHONANYWHERE.md`.
+
 ### 🧪 تست‌ها
-تست‌های خودکار بدون نیاز به توکن تلگرام در `worldwar-game/tests/` هستند (`smoke.py`، `test_new_features.py`، `test_regression.py`، `test_webhook.py`، `test_combat.py`، `test_politics_oil.py`، `test_adminpanel.py`) — راهنما در `tests/README.md`.
+تست‌های خودکار بدون نیاز به توکن تلگرام در `worldwar-game/tests/` هستند (`test_paw.py`، `test_webapp.py`، `smoke.py`، `test_new_features.py`، `test_regression.py`، `test_webhook.py`، `test_combat.py`، `test_politics_oil.py`، `test_adminpanel.py`) — راهنما در `tests/README.md`.

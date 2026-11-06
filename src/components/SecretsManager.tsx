@@ -179,13 +179,13 @@ export const SecretsManager: React.FC<SecretsManagerProps> = ({ configuredSecret
 
   const envFileSnippet = `# ─── تنظیمات بازی جنگ جهانی ───
 # توکن ربات اصلی بازی (از @BotFather)
-GAME_BOT_TOKEN=${configuredSecrets?.rawGameToken || '9206049189:AAFRAun6fOwMJpFTV1mwsmu78A9ycS1xpkQ'}
+GAME_BOT_TOKEN=${configuredSecrets?.rawGameToken || '9201202722:AAGuSaJQw16F_ugrKXUidttYfMqI9Cz3SVE'}
 
 # توکن ربات ادمین (ربات جداگانه از @BotFather)
-ADMIN_BOT_TOKEN=${configuredSecrets?.rawAdminToken || '9243985162:AAEyPPk0Rhj0azhm-8ItaY1jB8ouHxRbM74'}
+ADMIN_BOT_TOKEN=${configuredSecrets?.rawAdminToken || '9000162449:AAG-xoIDUSgE1LFWr1L3BOZjygueYuCZOfU'}
 
 # آیدی عددی ادمین اصلی (سوپرادمین) — برای گرفتن آیدی خود به @userinfobot پیام بدهید
-SUPER_ADMIN_ID=${configuredSecrets?.SUPER_ADMIN_ID || '8358901937'}
+SUPER_ADMIN_ID=${configuredSecrets?.SUPER_ADMIN_ID || '8666501866'}
 
 # مسیر دیتابیس (پیش‌فرض wwgame.db)
 DB_PATH=wwgame.db
@@ -400,7 +400,7 @@ FIREBASE_AUTH=${configuredSecrets?.FIREBASE_AUTH || 'F4vmRrXnlHHU7K5LGfl0Ylwx1ia
                 dir="ltr"
                 value={superAdminIdInput}
                 onChange={(e) => setSuperAdminIdInput(e.target.value)}
-                placeholder="8358901937"
+                placeholder="8666501866"
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono focus:border-amber-500 focus:outline-none"
               />
               <span className="text-[11px] text-slate-500 mt-1 block">از ربات @userinfobot برای پیدا کردن آیدی خود استفاده کنید</span>

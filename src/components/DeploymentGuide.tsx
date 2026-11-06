@@ -22,7 +22,7 @@ sudo apt install -y python3 python3-pip python3-venv git screen tmux`,
       id: 'step2',
       title: '۲. آماده‌سازی محیط مجازی و نصب کتابخانه‌های بازی',
       desc: 'کتابخانه‌های aiogram (نسخه 3) و aiosqlite و aiohttp نصب خواهند شد.',
-      code: `cd worldwar-game
+      code: `cd game
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt`,
@@ -35,20 +35,28 @@ pip install -r requirements.txt`,
 nano .env
 
 # مقادیر زیر را در فایل وارد کرده و ذخیره نمایید:
-GAME_BOT_TOKEN=9206049189:AAFRAun6fOwMJpFTV1mwsmu78A9ycS1xpkQ
-ADMIN_BOT_TOKEN=8623221084:AAH2AhCKveQyE9xRc6qT3IEztZm4F-xsoEQ
-SUPER_ADMIN_ID=8358901937`,
+GAME_BOT_TOKEN=9201202722:AAGuSaJQw16F_ugrKXUidttYfMqI9Cz3SVE
+ADMIN_BOT_TOKEN=9000162449:AAG-xoIDUSgE1LFWr1L3BOZjygueYuCZOfU
+SUPER_ADMIN_ID=8666501866`,
     },
     {
       id: 'step4',
-      title: '۴. اجرای بازی و ساخت خودکار دیتابیس',
-      desc: 'در اولین اجرا، دیتابیس wwgame.db با تمامی ۴۵ کشور، ۲۴ سلاح و ۸ تنگه به طور اتوماتیک ساخته و Seed می‌شود.',
-      code: `# اجرای هر دو ربات با هم (پیشنهادی):
-python3 run_all.py
+      title: '۴. اجرای بازی، پنل وب و ساخت خودکار دیتابیس (کاملاً پایتونی)',
+      desc: 'در اولین اجرا، دیتابیس wwgame.db با تمامی ۴۵ کشور، تجهیزات و ۸ تنگه به طور اتوماتیک ساخته و Seed می‌شود. پنل فرماندهی وب هم با پایتون اجرا می‌شود — دیگر نیازی به Node.js نیست.',
+      code: `# اجرای پنل وب + هر دو ربات (پیشنهادی):
+python3 server.py            # از ریشهٔ پروژه
+# یا:
+cd worldwar-game && python3 run_all.py
+
+# فقط ربات‌ها (بدون پنل وب):
+python3 run_bots.py
 
 # یا اجرای جداگانه در دو پنجره یا دو سرور:
 python3 run_game.py     # فقط ربات اصلی بازیکنان
-python3 run_admin.py    # فقط پنل مدیریت ادمین`,
+python3 run_admin.py    # فقط پنل مدیریت ادمین
+
+# پنل فرماندهی وب:  http://SERVER_IP:3000
+# سلامت سرویس:      http://SERVER_IP:3000/health`,
     },
     {
       id: 'step5',
@@ -57,14 +65,14 @@ python3 run_admin.py    # فقط پنل مدیریت ادمین`,
       code: `sudo nano /etc/systemd/system/wwgame.service
 
 [Unit]
-Description=World War Telegram Game Service
+Description=World War Telegram Game + Command Center (Python)
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/worldwar-game
-ExecStart=/root/worldwar-game/venv/bin/python3 run_all.py
+WorkingDirectory=/root/game
+ExecStart=/root/game/venv/bin/python3 server.py
 Restart=always
 RestartSec=5
 

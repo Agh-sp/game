@@ -9,8 +9,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H  # noqa: E402
 
-SUPER1 = 8666501866
-SUPER2 = 8358901937
+SUPER1 = 8666501866          # آیدی ادمین کل (ثبت‌شده در core/config.py)
+SUPER2 = SUPER1              # نسخهٔ قبلی دو سوپرادمین داشت؛ اکنون یک ادمین کل داریم
 PLAYER = 501
 STRANGER = 502
 
@@ -45,19 +45,19 @@ async def main():
     from core.admins import ensure_super_admins, is_admin, is_super_admin
     H.check(SUPER1 in SUPER_ADMIN_IDS and SUPER2 in SUPER_ADMIN_IDS,
             f"هر دو آیدی در کانفیگ هستند {SUPER_ADMIN_IDS}")
-    H.check(set(DEFAULT_SUPER_ADMIN_IDS) == {SUPER1, SUPER2}, "آیدی‌های پیش‌فرض درست است")
+    H.check(set(DEFAULT_SUPER_ADMIN_IDS) == {SUPER1}, f"آیدی پیش‌فرض ادمین کل درست است {DEFAULT_SUPER_ADMIN_IDS}")
     await ensure_super_admins()
     rows = await db.fetchall("SELECT id, is_super, perms FROM admins")
     ids = {int(r["id"]) for r in rows}
-    H.check(SUPER1 in ids and SUPER2 in ids, "هر دو سوپرادمین در جدول admins ثبت شدند")
-    H.check(all(int(r["is_super"]) == 1 for r in rows if int(r["id"]) in (SUPER1, SUPER2)),
-            "هر دو is_super=1 دارند")
+    H.check(SUPER1 in ids, "ادمین کل در جدول admins ثبت شد")
+    H.check(all(int(r["is_super"]) == 1 for r in rows if int(r["id"]) in {SUPER1}),
+            "ادمین کل is_super=1 دارد")
     from core.admins import ALL_PERMS
     import json as _json
-    sup_rows = [r for r in rows if int(r["id"]) in (SUPER1, SUPER2)]
+    sup_rows = [r for r in rows if int(r["id"]) in {SUPER1}]
     H.check(all(set(_json.loads(r["perms"] or "[]")) >= set(ALL_PERMS) for r in sup_rows),
-            f"دسترسی ۱۰۰٪ ({len(ALL_PERMS)} مجوز) برای هر دو ثبت شده")
-    H.check(await is_admin(SUPER1) and await is_super_admin(SUPER2), "دسترسی ادمین برای هر دو فعال است")
+            f"دسترسی ۱۰۰٪ ({len(ALL_PERMS)} مجوز) برای ادمین کل ثبت شده")
+    H.check(await is_admin(SUPER1) and await is_super_admin(SUPER1), "دسترسی ادمین کل فعال است")
     H.check(not await is_admin(PLAYER), "بازیکن عادی ادمین نیست")
 
     print("\n== TEST 2: /panel فقط برای ادمین ==")

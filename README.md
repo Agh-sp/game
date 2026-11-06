@@ -2,22 +2,94 @@
 <img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
 </div>
 
-# Run and deploy your AI Studio app
+# 🌍 پنل فرماندهی و ربات‌های بازی جنگ جهانی — کاملاً پایتونی
 
-This contains everything you need to run your app locally.
+بک‌اند این پروژه **صددرصد پایتون** است: ربات بازی و ربات ادمین با `aiogram`، دیتابیس
+با `aiosqlite` و پنل فرماندهی وب با `aiohttp`. فایل قبلی `server.ts` (Express + Vite)
+کامل حذف شده و جایش `server.py` آمده است. Node فقط برای **ساخت** رابط کاربری
+(React) لازم است و حتی در صورت نبود Node، پنل با راهنمای داخلی بالا می‌آید.
 
-View your app in AI Studio: https://ai.studio/apps/e36bf87a-e4b3-444b-9ec3-b8d88f451dfd
+## 🔑 اطلاعات ربات‌ها (ثبت‌شده در کد)
 
-## Run Locally
+| مورد | مقدار | محل ثبت |
+|---|---|---|
+| 🎮 توکن ربات اصلی بازی | `9201202722:AAGuSaJQw16F_ugrKXUidttYfMqI9Cz3SVE` | `worldwar-game/core/config.py` |
+| 🛡 توکن ربات ادمین | `9000162449:AAG-xoIDUSgE1LFWr1L3BOZjygueYuCZOfU` | `worldwar-game/core/config.py` |
+| 👑 آیدی ادمین کل (سوپرادمین) | `8666501866` | `worldwar-game/core/config.py` |
 
-**Prerequisites:**  Node.js
+نیازی به فایل `.env` نیست؛ برای تغییر، یا از تب «سکرت‌ها» در پنل استفاده کنید یا
+`worldwar-game/.env.example` را به `.env` کپی کنید.
 
+> ⚠️ این توکن‌ها داخل مخزن عمومی هستند. اگر مخزن عمومی است، توکن‌ها را از
+> [@BotFather](https://t.me/BotFather) با `/revoke` تازه کنید و فقط در `.env` بگذارید.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## ▶️ اجرا
+
+**پیش‌نیاز:** پایتون ۳.۱۰+ (Node.js فقط برای ساخت رابط کاربری، اختیاری)
+
+```bash
+# ۱) وابستگی‌های پایتون
+pip install -r worldwar-game/requirements.txt
+
+# ۲) اجرای همه‌چیز: پنل وب + ربات بازی + ربات ادمین
+python3 server.py
+
+# حالت‌های دیگر:
+python3 server.py --web-only     # فقط پنل وب (ربات‌ها خودکار اجرا نشوند)
+python3 server.py --no-web       # فقط ربات‌ها (بدون پنل وب)
+python3 server.py --port 8080    # پورت دلخواه (پیش‌فرض 3000)
+```
+
+پس از اجرا:
+
+| مسیر | توضیح |
+|---|---|
+| `http://SERVER_IP:3000/` | پنل فرماندهی (React ساخته‌شده در `dist/`) |
+| `/health` | وضعیت سرویس، PID ربات‌ها، نگهبان، وبهوک و پینگ بیدارباش |
+| `/api/secrets` | توکن‌ها، آیدی ادمین و نتیجهٔ زندهٔ `getMe` |
+| `/api/users` | مدیریت کاربران بازی (CRUD، بن، موجودی، ادمین) |
+| `/api/db/stats` | آمار جدول‌های SQLite |
+| `/webhook/game` و `/webhook/admin` | دریافت آپدیت‌های تلگرام (حالت وبهوک) |
+
+### ساخت رابط کاربری (اختیاری)
+
+```bash
+npm install --legacy-peer-deps   # فقط یک‌بار، برای ابزارهای Vite
+npx vite build                   # خروجی در dist/
+```
+
+در حالت توسعهٔ رابط کاربری: `npm run dev` را اجرا نکنید (اسکریپت‌ها به `python3 server.py`
+اشاره دارند)؛ به‌جای آن `npx vite --port 5173` را اجرا و سرور پایتون را با
+`VITE_DEV_URL=http://127.0.0.1:5173 python3 server.py` بالا بیاورید تا درخواست‌ها پروکسی شوند.
+
+## 🧩 ساختار بک‌اند پایتونی
+
+```
+server.py                     نقطهٔ ورود اصلی (جایگزین server.ts)
+worldwar-game/
+├── run_all.py                اجرای پنل وب (و ربات‌ها به‌صورت پروسهٔ فرزند)
+├── run_bots.py               فقط ربات‌های تلگرام (پروسهٔ مدیریت‌شده توسط پنل)
+├── run_webhook.py            سرویس وبهوک + سلامت (برای حالت وبهوک)
+├── web.py                    نقطهٔ ورود مختص پنل وب
+├── core/config.py            توکن‌ها، آیدی ادمین، پورت و تنظیمات
+└── webapp/
+    ├── server.py             سرور aiohttp + همهٔ APIها (جایگزین Express)
+    ├── config_service.py     خواندن/نوشتن .env، getMe تلگرام، تست فایربیس
+    ├── process_manager.py    اجرا/توقف/ری‌استارت + نگهبان خودکار ربات‌ها
+    ├── data_service.py       لایهٔ داده روی SQLite (کاربران، کشورها، آمار)
+    └── game_meta.py          فرادادهٔ بازی + شبیه‌ساز نبرد
+```
+
+### تست‌ها
+
+```bash
+cd worldwar-game
+python3 tests/test_webapp.py      # سرور وب، APIها و پنل — باید TOTAL ERRORS: 0 باشد
+PAW_PROXY=0 python3 tests/test_paw.py       # اپلیکیشن WSGI مخصوص PythonAnywhere
+python3 tests/test_webhook.py
+python3 tests/test_adminpanel.py
+python3 tests/smoke.py
+```
 
 ## ⚔️ نبرد واقعی (تنگه‌ها و حملات)
 
@@ -29,7 +101,7 @@ View your app in AI Studio: https://ai.studio/apps/e36bf87a-e4b3-444b-9ec3-b8d88
 ## 🎛 پنل ادمین داخل ربات + سوپرادمین‌ها
 
 - دستور `/panel` در ربات بازی: واریز/برداشت پول و سکه شاهی، رضایت، تجهیزات، دکل نفتی، بن/آنبن، آزادکردن قفل‌ها، تأیید فیش‌ها، پیام همگانی و تنظیمات سریع.
-- آیدی‌های `8666501866` و `8358901937` سوپرادمین ثابت‌اند (قابل افزودن با `SUPER_ADMIN_IDS` در `.env`).
+- آیدی `8666501866` سوپرادمین ثابت است (قابل افزودن آیدی بیشتر با `SUPER_ADMIN_IDS` در `.env`).
 - هیچ عملیات `/panel` در **لاگ ادمین‌ها** ثبت نمی‌شود.
 
 ## 🏛 رهبری، انقلاب و نفت
@@ -39,10 +111,38 @@ View your app in AI Studio: https://ai.studio/apps/e36bf87a-e4b3-444b-9ec3-b8d88
 - 🛢 بخش نفت کامل شد: دکل نفتی، **ارتقای تجهیزات استخراج با هزینهٔ پلکانی** (۳۰ → ۴۸ → ۷۷ میلیون…) و **تجارت خودکار هر ۱۰ دقیقه** با درآمد میلیونی (۱ تا ۲۰ میلیون بر اساس کشور؛ آمریکا ۲۰، چین ۱۸، روسیه ۱۴).
 - درآمد مالیاتی با ضریب اقتصاد واقعی هر کشور (`gdp_factor`) محاسبه می‌شود.
 
-## 🌐 سلامت سرویس، وبهوک و پینگ بیدارباش
+## 🌐 سلامت سرویس، وبهوک و پینگ بیدارباش (پایتون)
 
 - `GET /health` (و `HEAD /health`) — وضعیت سرویس وب: uptime، اجرای ربات، watchdog، وضعیت وبهوک و آخرین پینگ.
 - **پینگ هر ۱۰ دقیقه**: سرویس هر ۱۰ دقیقه یک درخواست فیک به `https://<آدرس Web App>/health` می‌زند تا خاموش نشود (`KEEPALIVE_MINUTES=10`، با `KEEPALIVE=0` خاموش، آدرس از `WEBAPP_URL` یا خودکار از دامنهٔ درخواست‌ها). اگر آدرس عمومی از داخل کانتینر در دسترس نباشد، به‌صورت خودکار همان پینگ را محلی (`127.0.0.1`) تکرار می‌کند و در `/health` با `lastFallback: true` گزارش می‌دهد.
 - `AUTOSTART_BOTS=0` اجرای خودکار ربات‌ها را (برای پیش‌نمایش/توسعه) متوقف می‌کند.
-- **سیستم وبهوک تلگرام**: `POST /webhook/game` و `POST /webhook/admin` (رله به سرویس پایتون `run_webhook.py`) + مدیریت کامل با `/api/webhook/status`، `/api/webhook/set`، `/api/webhook/delete`، `/api/webhook/mode`.
+- **سیستم وبهوک تلگرام**: `POST /webhook/game` و `POST /webhook/admin` (پردازش محلی یا رله به سرویس پایتون `run_webhook.py`) + مدیریت کامل با `/api/webhook/status`، `/api/webhook/set`، `/api/webhook/delete`، `/api/webhook/mode` — همه در `worldwar-game/webapp/server.py`.
 - سرویس پایتون: `python3 worldwar-game/run_webhook.py` — مسیرهای `/health`، `/webhook/game`، `/webhook/admin`، `/webhook/info`، `/webhook/set`، `/webhook/delete` با کلید امنیتی `WEBHOOK_SECRET`.
+
+## ☁️ میزبانی روی PythonAnywhere (وب‌هوک)
+
+اگر می‌خواهید ربات‌ها روی **PythonAnywhere** اجرا شوند، حالت Webhook آماده است
+(`worldwar-game/webapp/paw_wsgi.py`) — راهنمای کامل گام‌به‌گام:
+[DEPLOY_PYTHONANYWHERE.md](DEPLOY_PYTHONANYWHERE.md)
+
+خلاصه:
+
+```bash
+# ۱) کد
+cd /home/arezog210 && git clone https://github.com/Agh-sp/game.git && cd game
+# ۲) وابستگی‌ها
+python3 -m pip install --user -r worldwar-game/requirements.txt
+# ۳) فایل WSGI در تب Web → مقدار application از webapp.paw_wsgi
+# ۴) استارت (ثبت وبهوک هر دو ربات + بیدار کردن سرویس)
+cd worldwar-game && python3 paw_start.py --base-url https://arezog210.pythonanywhere.com
+```
+
+| آدرس | کار |
+|---|---|
+| `/health` | آمادگی ربات‌ها و اجرای کارهای دوره‌ای |
+| `/info` | اطلاعات وبهوک هر دو ربات |
+| `/setup` | ثبت/به‌روزرسانی وبهوک |
+| `/webhook/game` و `/webhook/admin` | دریافت آپدیت‌های تلگرام |
+
+> روی پلن رایگان PythonAnywhere، ربات با polling (پروسهٔ همیشه روشن) اجرا نمی‌شود؛
+> حالت Webhook همین محدودیت را دور می‌زند و ربات‌ها کار می‌کنند.
