@@ -67,15 +67,19 @@ async def empire(call: CallbackQuery, state: FSMContext):
         (call.from_user.id,),
     )
     prj_lines = [f"   {p['bemoji']} {p['name'] or p['bname']} — {fmt_hm(hours_left(p['completes_at']))} مانده" for p in projects[:5]]
+    from core.income import income_summary_text
+    inc_txt = await income_summary_text(call.from_user.id)
     text = (
         f"🏰 <b>امپراطوری من</b>\n\n{await country_display(call.from_user.id, extended=True)}\n\n"
-        f"💰 درآمد (خودکار هر {minutes} دقیقه): {income_txt}\n"
+        f"{inc_txt}\n⏳ پرداخت بعدی: حداکثر {minutes} دقیقه دیگر\n"
     )
     if prj_lines:
         text += "\n🏗 <b>پروژه‌های در جریان:</b>\n" + "\n".join(prj_lines) + "\n"
     text += "\n" + blocked_banner(state)
     rows = [
         [("🏛 مدیریت کشور", "g|mg")],
+        [("💵 درآمد", "g|inc"), ("🗺 استان‌ها", "g|prov")],
+        [("🤝 اتحاد", "g|ally"), ("☢️ غنی‌سازی", "g|enrich")],
         [("⚔️ اتاق جنگ", "g|war")],
         [("🤝 تجارت بین‌المللی", "g|trd")],
         [("🕊 سازمان ملل", "g|un")],

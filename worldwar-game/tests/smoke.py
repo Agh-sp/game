@@ -85,9 +85,44 @@ async def run():
     await income_tick(bot)
     texts, _ = shot("income tick")
     joined = "\n".join(texts)
-    check("(روزانه" in joined, "income tick shows daily income too")
     check("میلیون" in joined, "income tick message uses millions")
-    check("نرخ مالیات" in joined, "income tick shows tax rate")
+    check("مالیات مردم" in joined, "income tick shows people's tax line")
+    check("فروش نفت" in joined, "income tick shows oil income line")
+    check("عوارض تنگه" in joined, "income tick shows strait tolls line")
+    check("ضریب ارتقا" in joined, "income tick shows growth multiplier")
+    # مالیات باید میلیونی و مثبت باشد
+    import re as _re
+    m = _re.search(r"مالیات مردم: <b>([\d.,]+)", joined)
+    check(bool(m), "tax amount is parseable")
+    if m:
+        try:
+            val = float(m.group(1).replace(",", ""))
+        except ValueError:
+            val = 0.0
+        check(val > 0, f"tax amount is positive (got {val} میلیون)")
+
+    # موتور درآمد: مالیات باید با نرخ مالیات/رضایت رشد کند و کشور قوی‌تر بیشتر بگیرد
+    from core import income as inc
+    await db.execute("UPDATE states SET satisfaction=80, tax_rate=0 WHERE user_id=?", (UA,))
+    low = await inc.tax_income(UA, 1.0)
+    await db.execute("UPDATE states SET tax_rate=0.4 WHERE user_id=?", (UA,))
+    high = await inc.tax_income(UA, 1.0)
+    check(high["amount"] > low["amount"] * 1.3,
+          f"tax grows with tax rate ({low['amount']:,} → {high['amount']:,})")
+    check(low["amount"] >= 10_000_000,
+          f"tax base is at least 10 million (got {low['amount']:,})")
+    # نفت همیشه پرداخت می‌شود (بدون نیاز به دکل)
+    oil = await inc.oil_income(UA, 1.0)
+    check(oil["amount"] > 0, f"oil income paid automatically ({oil['amount']:,})")
+    # ضریب ارتقا با پروژه‌ها بالا می‌رود
+    g1 = await inc.growth_multiplier(UA)
+    b = await db.fetchone("SELECT id FROM buildings LIMIT 1")
+    for _ in range(3):
+        await db.execute(
+            "INSERT INTO player_projects(user_id, building_id, name, status) "
+            "VALUES(?,?,'تست','done')", (UA, b["id"]))
+    g2 = await inc.growth_multiplier(UA)
+    check(g2["mult"] > g1["mult"], f"growth multiplier rises with projects ({g1['mult']} → {g2['mult']})")
 
     await db.close()
     print("\n=== TOTAL ERRORS:", len(ERRORS))

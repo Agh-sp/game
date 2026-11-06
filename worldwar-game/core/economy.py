@@ -192,6 +192,13 @@ async def satisfaction_recompute(user_id: int) -> float:
                         if ge == label:
                             sat += delta
 
+    # 🌐 رفاه اینترنت — پوشش دیجیتال رضایت مردم را بالا می‌برد
+    try:
+        from core import internet
+        sat += await internet.satisfaction_bonus(user_id)
+    except Exception:
+        pass
+
     # دین و حکومت
     sat += rel_effect(rel, "satisfaction") + gov_effect(gov, "satisfaction")
 

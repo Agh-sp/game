@@ -122,7 +122,9 @@ async def report_list(call: CallbackQuery):
     await call.message.edit_text(
         "⚖️ <b>گزارش کشور به سازمان ملل</b>\n\nکدام کشور را گزارش می‌دهید؟ "
         "پس از ذکر دلایل، رای‌گیری برای تحریم انجام می‌شود:\n"
-        "• 🔇 خلع سلاح (۷ روز)\n• 🚫 لغو تجارت با همه کشورها\n• 👑 برکناری رهبر (شروع رای‌گیری با سکه شاهی)",
+        "• 🔇 خلع سلاح (۷ روز)\n• 🚫 لغو تجارت با همه کشورها\n"
+        "• 🏭 تحریم نفت و انرژی (۵۰٪ کاهش درآمد)\n"
+        "<i>برکناری رهبر از بازی حذف شده است.</i>",
         reply_markup=kb(rows),
     )
 
@@ -133,11 +135,14 @@ async def report_sanction(call: CallbackQuery):
     t_country = await get_country(target_id)
     await call.answer()
     await call.message.edit_text(
-        f"⚖️ گزارش {t_country['flag']} <b>{t_country['name']}</b>\n\nچه تحریمی درخواست می‌کنید؟",
+        f"⚖️ گزارش {t_country['flag']} <b>{t_country['name']}</b>\n\n"
+        "مجازات‌های مجاز سازمان ملل: <b>خلع سلاح</b>، لغو تجارت و تحریم نفت.\n"
+        "چه تحریمی درخواست می‌کنید؟\n"
+        "<i>برکناری رهبر از بازی حذف شده است — تحریم‌ها فقط اقتصادی/نظامی‌اند.</i>",
         reply_markup=kb([
             [("🔇 خلع سلاح", f"g|unsanc|disarm|{target_id}")],
             [("🚫 لغو تجارت", f"g|unsanc|trade|{target_id}")],
-            [("👑 برکناری رهبر (۵۰ سکه)", f"g|unsanc|leader|{target_id}")],
+            [("🏭 تحریم بخش نفت و انرژی", f"g|unsanc|oil|{target_id}")],
             back_row("g|unrep"),
         ]),
     )
@@ -145,19 +150,34 @@ async def report_sanction(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("g|unsanc|"))
 async def sanction_start(call: CallbackQuery, state: FSMContext):
-    _, kind, target_id = call.data.split("|")
-    target_id = int(target_id)
-    user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))
+    parts = call.data.split("|")          # g | unsanc | <kind> | <target_id>
+    kind, target_id = parts[2], int(parts[3])
+    # 🚫 «برکناری رهبر» حذف شد — هیچ کشوری نمی‌تواند رهبر کشور دیگری را برکنار کند.
     if kind == "leader":
-        if user["royal_coins"] < 50:
-            return await call.answer("🪙 برای برکناری رهبر ۵۰ سکه شاهی لازم است!", show_alert=True)
-        await db.execute("UPDATE users SET royal_coins=royal_coins-? WHERE id=?", (50, user["id"]))
+        return await call.answer(
+            "⛔️ برکناری رهبر حذف شده است. تحریم‌های مجاز: خلع سلاح، لغو تجارت، "
+            "تحریم نفت و انرژی.", show_alert=True)
+    if kind not in ("disarm", "trade", "oil"):
+        return await call.answer("نوع تحریم نامعتبر است", show_alert=True)
     await state.set_state(UNFSM.report_reason)
     await state.update_data(sanc_kind=kind, target_id=target_id)
     await call.answer()
-    titles = {"disarm": "خلع سلاح", "trade": "لغو تجارت", "leader": "برکناری رهبر"}
+    titles = {"disarm": "خلع سلاح", "trade": "لغو تجارت", "oil": "تحریم نفت و انرژی"}
+    effects = {
+        "disarm": "🔇 کشور هدف تا <b>۷ روز</b> نمی‌تواند حمله کند (حمله‌هایش بلاک می‌شود).",
+        "trade": "🚫 کشور هدف تا پایان تحریم از تجارت با همه کشورها محروم می‌شود.",
+        "oil": "🏭 درآمد نفت و انرژی کشور هدف تا پایان تحریم <b>۵۰٪</b> کاهش می‌یابد.",
+    }
+    votes_len = float(await get_setting("vote_duration_hours", "24"))
+    t_country = await get_country(target_id)
     await call.message.edit_text(
-        f"⚖️ تحریم «<b>{titles[kind]}</b>» — دلایل خود را بنویسید:\n برای انصراف /cancel"
+        f"⚖️ <b>تحریم {titles[kind]}</b> علیه <b>{t_country['name']}</b>\n\n"
+        f"{effects[kind]}\n\n"
+        "🎫 هزینهٔ ثبت: <b>رایگان</b>\n"
+        f"⏳ رای‌گیری تا <b>{fmt_hm(votes_len)}</b> باز می‌ماند.\n"
+        "⚡️ <b>نکته:</b> اگر بیش از نیمی از کشورهای دارای حق رأی موافق باشند، تحریم "
+        "<u>فوراً</u> اعمال می‌شود؛ در غیر این صورت پس از پایان رأی‌گیری.\n\n"
+        "دلایل خود را بنویسید (۱ تا ۵۰۰ حرف):\n برای انصراف /cancel"
     )
 
 
@@ -173,7 +193,7 @@ async def sanction_create(message: Message, state: FSMContext):
     m_country = await get_country(message.from_user.id)
     titles = {"disarm": f"خلع سلاح کشور {t_country['name']}",
               "trade": f"لغو تجارت با {t_country['name']}",
-              "leader": f"برکناری رهبر {t_country['name']}"}
+              "oil": f"تحریم نفت و انرژی {t_country['name']}"}
     hours = float(await get_setting("vote_duration_hours", "24"))
     await db.execute(
         "INSERT INTO un_votes(title, kind, subject_id, options, ends_at, created_by) VALUES(?,?,?,?,?,?)",

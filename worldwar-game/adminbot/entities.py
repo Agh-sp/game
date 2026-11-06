@@ -467,6 +467,8 @@ SETTING_LABELS = {
     "coin_price_toman": "💵 قیمت هر سکه شاهی (تومان)",
     "coins_to_money_rate": "🔄 نرخ تبدیل سکه به پول پایه",
     "sales_support": "🛒 آیدی پشتیبانی فروش",
+    "coin_sell_rate": "💰 نرخ فروش هر سکه به بازیکن",
+    "oil_rig_bonus_percent": "🛢 پاداش هر دکل نفتی (٪)",
     "c2c_card": "💳 شماره کارت به کارت (اختیاری)",
     "c2c_holder": "👤 نام صاحب کارت",
     "join_channels": "📢 کانال‌های عضویت اجباری (JSON)",
@@ -508,6 +510,43 @@ SETTING_LABELS = {
     "season_required_votes": "🗳 حداقل رأی سیزن",
     "daily_report_hour": "📋 ساعت گزارش روزانه (تهران)",
     "main_currency": "💵 ارز اصلی فعلی",
+    # ── موتور درآمد میلیونی (core/income.py) ──
+    "income_tax_base_m": "💰 پایهٔ مالیات هر دوره (میلیون)",
+    "income_tax_step_m": "💰 پلهٔ ضریب اقتصاد (میلیون)",
+    "income_oil_unit_m": "🛢 ضریب تبدیل پایهٔ نفتی",
+    "income_oil_floor_m": "🛢 کف درآمد نفتی (میلیون)",
+    "income_strait_m": "⚓ درآمد هر تنگه (میلیون)",
+    "income_resource_m": "♻️ درآمد فروش هر بخش منابع (میلیون)",
+    "income_floor_m": "💵 کف تضمینی کل درآمد (میلیون)",
+    "income_growth_cap": "📈 سقف ضریب ارتقای درآمد",
+    "oil_level_income_bonus": "🛠 پاداش هر سطح تجهیزات استخراج",
+    # ── ♻️ فروش منابع ──
+    "res_price_power": "⚡ قیمت فروش برق",
+    "res_price_water": "💧 قیمت فروش آب",
+    "res_price_gas": "🔥 قیمت فروش گاز",
+    "res_price_food": "🍞 قیمت فروش غذا",
+    "res_price_oil": "🛢 قیمت فروش نفت (بشکه)",
+    "res_price_materials": "🧱 قیمت فروش مصالح",
+    "sec_resource_sale": "♻️ بخش فروش منابع (۰/۱)",
+    # ── ⚔️ نبرد / استان / پایگاه دریایی ──
+    "attack_cooldown_minutes": "⏳ فاصله حمله (دقیقه)",
+    "cyber_cooldown_minutes": "🕶 فاصله عملیات سایبری (دقیقه)",
+    "naval_base_cost": "⚓ هزینهٔ پایگاه دریایی",
+    "naval_base_sea_power": "⚓ قدرت دریایی هر پایگاه",
+    "capture_province_bonus": "🗺 شانس تصرف استان (٪)",
+    "conquest_loot_bonus": "💰 پاداش غارت تسخیر (٪)",
+    "province_defense_min_chance": "🗺 حداقل شانس دفاع استان (٪)",
+    "province_defense_max_chance": "🗺 حداکثر شانس دفاع استان (٪)",
+    # ── ☢️ تأسیسات هسته‌ای ──
+    "nuclear_leak_chance": "☢️ شانس نشت رادیواکتیو (٪)",
+    "nuclear_rebuild_cost": "☢️ هزینهٔ بازسازی تأسیسات",
+    "nuclear_site_hp": "☢️ استحکام تأسیسات",
+    # ── 🌐 رفاه اینترنت ──
+    "internet_max_level": "🌐 حداکثر سطح اینترنت",
+    "internet_upgrade_cost": "🌐 هزینهٔ پایهٔ ارتقای اینترنت",
+    "internet_materials_per_level": "🌐 مصالح لازم هر ارتقا",
+    "internet_growth_bonus": "🌐 سهم درآمد هر سطح (٪)",
+    "internet_satisfaction_bonus": "🌐 رضایت هر سطح",
 }
 
 E("set", "settings", "تنظیمات بازی", "⚙️", "settings", [

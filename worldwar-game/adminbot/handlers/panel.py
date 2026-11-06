@@ -37,6 +37,7 @@ def root_text(admin: dict) -> str:
         "💡 دستورهای سریع:\n"
         "/panel — پنل اصلی\n/stats — آمار کلی\n/u — جستجوی کاربر\n/reset_wealth — ریست پول و سکه همه\n"
         "/reset_players — ریست بازیکنان و کشورها\n/bc — پیام همگانی\n"
+        "/resetcountry <آیدی> — ریست کشور یک بازیکن و انتخاب کشور تازه\n"
         "/receipts — فیش‌های در انتظار\n/tickets — تیکت‌ها\n/settings — تنظیمات\n/logs — لاگ‌ها\n"
         "/daily — گزارش ۲۴ ساعت اخیر\n/images — کتابخانه تصاویر")
 
