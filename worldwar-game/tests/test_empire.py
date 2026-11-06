@@ -43,7 +43,7 @@ async def main():
         w_tax = await inc.tax_income(weak["uid"], 1.0)
         H.check(s_tax["amount"] > w_tax["amount"],
                 f"کشور قوی درآمد بیشتر دارد ({s_tax['amount']:,} > {w_tax['amount']:,})")
-    H.check(src["growth"]["cap"] == 3.0, "سقف ضریب ارتقا ۳ برابر است")
+    H.check(src["growth"]["cap"] == 5.0, f"سقف ضریب ارتقا ۵ برابر است ({src['growth']['cap']})")
 
     print("\n== TEST 2: رشد خودکار درآمد با ارتقا ==")
     g0 = await inc.growth_multiplier(A)
@@ -58,7 +58,54 @@ async def main():
     H.check(g1["mult"] > g0["mult"], f"ضریب ارتقا بالا رفت ({g0['mult']} → {g1['mult']})")
     H.check(g1["mult"] <= g1["cap"], f"ضریب از سقف رد نشد ({g1['mult']} ≤ {g1['cap']})")
     txt = await inc.income_summary_text(A)
-    H.check("ضریب ارتقا" in txt and "نفت" in txt and "تنگه" in txt, "متن خلاصه درآمد کامل است")
+    H.check("ضریب کل ارتقا" in txt and "نفت" in txt and "تنگه" in txt,
+            "متن خلاصه درآمد کامل است")
+    H.check("مالیات مردم" in txt, "متن خلاصه مالیات را نشان می‌دهد")
+
+    print("\n== TEST 2.5: 🛢 دکل نفتی بیشتر → درآمد بیشتر ==")
+    rig = await db.fetchone("SELECT id FROM buildings WHERE name='دکل نفتی'")
+    H.check(rig is not None, "دکل نفتی در ساختمان‌ها هست")
+
+    async def income_with_rigs(n: int) -> dict:
+        await db.execute("DELETE FROM player_assets WHERE user_id=?", (A,))
+        if n:
+            await db.execute(
+                "INSERT INTO player_assets(user_id,item_type,item_id,quantity) VALUES(?,?,?,?)",
+                (A, "building", rig["id"], n))
+        return await inc.income_sources(A)
+
+    base = await income_with_rigs(0)
+    one = await income_with_rigs(1)
+    five = await income_with_rigs(5)
+    ten = await income_with_rigs(10)
+    H.check(one["oil"]["amount"] > base["oil"]["amount"],
+            f"۱ دکل نفت را بیشتر کرد ({base['oil']['amount']:,} → {one['oil']['amount']:,})")
+    H.check(five["oil"]["amount"] > one["oil"]["amount"],
+            f"۵ دکل بیشتر از ۱ دکل ({five['oil']['amount']:,})")
+    H.check(ten["oil"]["amount"] > five["oil"]["amount"],
+            f"۱۰ دکل بیشتر از ۵ دکل ({ten['oil']['amount']:,})")
+    H.check(ten["total"] > base["total"] * 1.5,
+            f"درآمد کل با ۱۰ دکل >۵۰٪ بیشتر ({base['total']:,} → {ten['total']:,})")
+    H.check(ten["oil"]["rigs"] == 10, f"تعداد دکل درست گزارش می‌شود ({ten['oil']['rigs']})")
+    H.check(ten["oil"]["rig_mult"] > 1.5,
+            f"ضریب دکل‌ها اعمال شد (×{ten['oil']['rig_mult']})")
+    H.check(ten["growth"]["mult"] > base["growth"]["mult"],
+            f"ضریب ارتقا با دکل بالا رفت (×{base['growth']['mult']} → ×{ten['growth']['mult']})")
+    # سقف ضریب
+    await db.execute(
+        "UPDATE player_assets SET quantity=200 WHERE user_id=? AND item_type='building'", (A,))
+    capped = await inc.growth_multiplier(A)
+    H.check(capped["mult"] <= capped["cap"], f"ضریب از سقف رد نشد (×{capped['mult']} ≤ ×{capped['cap']})")
+    H.check(capped["capped"], "وضعیت رسیدن به سقف گزارش می‌شود")
+    # متن نمایش تعداد دکل را نشان دهد
+    await db.execute("DELETE FROM player_assets WHERE user_id=?", (A,))
+    await db.execute(
+        "INSERT INTO player_assets(user_id,item_type,item_id,quantity) VALUES(?,?,?,?)",
+        (A, "building", rig["id"], 4))
+    txt = await inc.income_summary_text(A)
+    H.check("دکل نفتی" in txt, "متن درآمد دکل نفتی را نشان می‌دهد")
+    H.check("4 دکل" in txt or "۴ دکل" in txt, "تعداد دکل در متن هست")
+    await db.execute("DELETE FROM player_assets WHERE user_id=?", (A,))
 
     print("\n== TEST 3: ۵ استان برای هر کشور ==")
     await prov.ensure_provinces()

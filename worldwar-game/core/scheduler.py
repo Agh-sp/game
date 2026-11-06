@@ -111,7 +111,8 @@ async def income_tick(bot) -> None:
             f"{c.get('flag', '')} <b>{c.get('name', '')}</b>\n"
             f"📈 ضریب ارتقا: <b>×{mult}</b>\n\n"
             f"💰 مالیات مردم: <b>{fmt_money(tax_amt)}</b>\n"
-            f"🛢 فروش نفت: <b>{fmt_money(oil_amt)}</b>\n"
+            f"🛢 فروش نفت: <b>{fmt_money(oil_amt)}</b>"
+            f" <i>({oil['rigs']} دکل، ×{oil['rig_mult']})</i>\n"
             f"⚓ عوارض تنگه‌ها: <b>{fmt_money(strait_amt)}</b>\n"
         )
         if subsidy_slice:

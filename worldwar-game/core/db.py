@@ -975,7 +975,8 @@ DEFAULT_SETTINGS = {
     "income_tax_step_m": "8",         # به ازای هر واحد ضریب اقتصاد کشور (میلیون)
     "income_oil_unit_m": "1",         # ضریب oil_income_base → پول (میلیون)
     "income_strait_m": "14",          # عوارض هر تنگه برای مالک (میلیون)
-    "income_growth_cap": "3",         # سقف ضریب ارتقا
+    "income_growth_cap": "5",         # سقف ضریب ارتقا
+    "oil_rig_bonus_percent": "8",     # درصد افزایش درآمد نفت به ازای هر دکل نفتی
     # ─── نبرد و استان‌ها ───
     "attack_cooldown_minutes": "3",   # فاصله بین دو حمله
     "province_defense_min_chance": "10",

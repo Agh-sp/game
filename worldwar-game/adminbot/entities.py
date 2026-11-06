@@ -468,6 +468,7 @@ SETTING_LABELS = {
     "coins_to_money_rate": "🔄 نرخ تبدیل سکه به پول پایه",
     "sales_support": "🛒 آیدی پشتیبانی فروش",
     "coin_sell_rate": "💰 نرخ فروش هر سکه به بازیکن",
+    "oil_rig_bonus_percent": "🛢 پاداش هر دکل نفتی (٪)",
     "c2c_card": "💳 شماره کارت به کارت (اختیاری)",
     "c2c_holder": "👤 نام صاحب کارت",
     "join_channels": "📢 کانال‌های عضویت اجباری (JSON)",

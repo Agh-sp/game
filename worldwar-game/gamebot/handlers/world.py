@@ -41,26 +41,27 @@ async def income_menu(call: CallbackQuery):
     from core import income as inc
     src = await inc.income_sources(call.from_user.id)
     g = src["growth"]
-    lines = [
-        f"💵 <b>درآمد {src['minutes']} دقیقه‌ای شما</b>\n",
-        f"💰 مالیات مردم: <b>{fmt_money(src['tax']['amount'])}</b>",
-        f"   └ ضریب اقتصاد کشور: ×{src['tax']['gdp']} | "
-        f"رضایت ×{src['tax']['sat_mult']} | مالیات ×{src['tax']['tax_mult']}",
-        f"🛢 فروش نفت: <b>{fmt_money(src['oil']['amount'])}</b>",
-        f"   └ پایهٔ نفتی: {src['oil']['base_m']} میلیون | "
-        f"تجهیزات ×{src['oil']['level_mult']}",
-        f"⚓ عوارض تنگه‌ها: <b>{fmt_money(src['strait']['amount'])}</b>",
-        f"   └ {src['strait']['count']} تنگه × {src['strait']['per_m']} میلیون\n",
-        f"📊 <b>جمع هر دوره: {fmt_money(src['total'])}</b>",
-        f"📈 ضریب ارتقا: <b>×{g['mult']}</b> از سقف ×{g['cap']}\n",
-        "<b>راه‌های افزایش (خودکار):</b>",
-        f"  🏗 پروژه‌های ساخته‌شده: +{round(g['project'] * 100)}٪",
-        f"  🛠 تجهیزات استخراج نفت: +{round(g['rig'] * 100)}٪",
-        f"  🏢 شرکت‌های اقتصادی: +{round(g['company'] * 100)}٪",
-        f"  🙂 رضایت بالای ۵۰٪: +{round(g['satisfaction'] * 100)}٪",
-        f"  🗺 استان‌های اضافه: +{round(g['province'] * 100)}٪",
-        "\n💡 کشورهای قوی‌تر (چین، آمریکا، روسیه) پایهٔ بالاتری دارند، "
-        "ولی کشورهای ضعیف با ارتقا می‌توانند جبران کنند.",
+    lines = [f"💵 <b>درآمد {src['minutes']} دقیقه‌ای شما</b>\n"]
+    lines += await inc.income_breakdown_lines(call.from_user.id)
+    lines += [
+        "",
+        "<b>💰 جزئیات مالیات:</b>",
+        f"  ضریب اقتصاد کشور: ×{src['tax']['gdp']}",
+        f"  رضایت مردم: ×{src['tax']['sat_mult']}",
+        f"  نرخ مالیات: ×{src['tax']['tax_mult']}",
+        "",
+        "<b>🛢 جزئیات نفت:</b>",
+        f"  پایهٔ نفتی کشور: {src['oil']['base_m']} میلیون",
+        f"  تعداد دکل نفتی: <b>{src['oil']['rigs']}</b>",
+        f"  پاداش دکل‌ها: <b>×{src['oil']['rig_mult']}</b> "
+        f"(هر دکل {src['oil']['bonus_pct']:g}٪ بیشتر)",
+        f"  تجهیزات استخراج: ×{src['oil']['level_mult']}",
+        "",
+        "<b>⚓ تنگه‌ها:</b>",
+        f"  {src['strait']['count']} تنگه × {src['strait']['per_m']} میلیون",
+        "",
+        "💡 <b>هر دکلی که می‌سازی درآمدت را بیشتر می‌کند.</b>",
+        "دکل نفتی از 🎖 پادگان → دستهٔ گاز/نفت ساخته می‌شود.",
     ]
     await call.answer()
     await call.message.edit_text(
