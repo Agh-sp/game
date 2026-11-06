@@ -17,3 +17,8 @@ worldwar-game/backups/*.db
 # SQLite side files
 worldwar-game/*.db-wal
 worldwar-game/*.db-shm
+
+# ─── فایل‌های آپلود/بکاپ ───
+*.zip
+!public/assets/**/*.zip
+worldwar-game/backups/*.db
