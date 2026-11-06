@@ -11,6 +11,10 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+# ─── نام‌کاربری ربات‌ها (برای ساخت لینک در دکمه‌ها) ───
+ADMIN_BOT_USERNAME = "agfafagjganigagbot"
+GAME_BOT_USERNAME = "WorldWarWordbot"
+
 # ─── نام رسمی بازی ───
 GAME_NAME = "جنگ جهانی ۳"
 GAME_SHORT_NAME = "جنگ جهانی ۳"

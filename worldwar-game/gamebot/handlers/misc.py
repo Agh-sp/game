@@ -333,5 +333,5 @@ async def photo_without_order(message: Message, state: FSMContext):
         "📸 عکس شما دریافت شد، اما هیچ سفارش فعالی برای ثبت فیش پیدا نشد.\n\n"
         "برای ثبت فیش: 🪙 <b>سکه شاهی</b> → خرید سکه/پکیج → سپس عکس فیش را بفرستید.\n"
         "برای خرید کشور هم از 🏳 <b>کشورهای ویژه</b> → پرداخت با پول واقعی اقدام کنید.",
-        reply_markup=main_menu_kb(),
+        reply_markup=await main_menu_kb(),
     )

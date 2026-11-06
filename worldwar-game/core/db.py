@@ -751,14 +751,41 @@ async def init_db() -> None:
             value = texts.GUIDE
         await db.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (key, value))
 
-    # ── کانال/گروه رسمی: مقادیر پیش‌فرض کد بر مقادیر قدیمیِ دیتابیس اولویت دارند ──
+    # ── کانال/گروه رسمی + نام بازی: مقادیر کد بر مقادیر کهنهٔ دیتابیس اولویت دارند ──
     try:
-        from core.config import OFFICIAL_CHANNEL, OFFICIAL_CHANNELS, OFFICIAL_GROUP
+        import json
+
+        from core import config as cfg
         await db.execute("UPDATE settings SET value=? WHERE key='join_channels'",
-                         (__import__("json").dumps(list(OFFICIAL_CHANNELS), ensure_ascii=False),))
+                         (json.dumps(list(cfg.OFFICIAL_CHANNELS), ensure_ascii=False),))
         await db.execute("UPDATE settings SET value=? WHERE key='announcement_channel'",
-                         (OFFICIAL_CHANNEL,))
-        await db.execute("UPDATE settings SET value=? WHERE key='game_group'", (OFFICIAL_GROUP,))
+                         (cfg.OFFICIAL_CHANNEL,))
+        await db.execute("UPDATE settings SET value=? WHERE key='game_group'",
+                         (cfg.OFFICIAL_GROUP,))
+
+        # متن استارت/راهنما: هر مقدار کهنه‌ای که هنوز نام قدیمی بازی را دارد پاک می‌شود
+        # تا متن تازهٔ کد نمایش داده شود (متن دلخواه ادمینِ بدون نام قدیمی دست‌نخورده می‌ماند).
+        legacy_marks = ("WORLD_WAR_FIRE", "worldwarFIRE", "worldwarfire", "WORLD WAR FIRE")
+
+        def _is_legacy(value: str) -> bool:
+            """آیا این مقدار هنوز نام قدیمی بازی را دارد؟"""
+            v = value or ""
+            if any(m in v for m in legacy_marks):
+                return True
+            return "جنگ جهانی" in v and cfg.GAME_NAME not in v
+
+        for key in ("start_text", "guide_text"):
+            row = await db.fetchone("SELECT value FROM settings WHERE key=?", (key,))
+            if row and row["value"] and _is_legacy(row["value"]):
+                if key == "guide_text":
+                    await db.execute("UPDATE settings SET value=? WHERE key='guide_text'",
+                                     (texts.GUIDE,))
+                else:
+                    await db.execute("UPDATE settings SET value='' WHERE key='start_text'")
+        row = await db.fetchone("SELECT value FROM settings WHERE key='season_name'")
+        if row and row["value"] and _is_legacy(row["value"]):
+            await db.execute("UPDATE settings SET value=? WHERE key='season_name'",
+                             ("⚔️ سیزن ۱ — " + cfg.GAME_NAME,))
     except Exception:
         pass
 

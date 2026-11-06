@@ -250,16 +250,43 @@ def server_line() -> str:
 # ─── منوهای اصلی ───
 
 
-def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
+def _handle(value: str) -> str:
+    """نرمال‌سازی آیدی کانال/گروه برای ساخت لینک t.me."""
+    v = str(value or "").strip()
+    if v.startswith("https://t.me/"):
+        v = v[len("https://t.me/"):]
+    return v.lstrip("@").strip("/")
+
+
+async def channel_links() -> list[tuple[str, str, str]]:
+    """دکمه‌های گپ و کانال از تنظیمات دیتابیس (نه هاردکد).
+
+    اگر ادمین گروه/کانال را از پنل عوض کند، منوی اصلی هم فوراً همان را نشان می‌دهد.
+    """
+    from core import config as cfg
+    group = _handle(await get_setting("game_group", "") or cfg.OFFICIAL_GROUP)
+    channel = _handle(await get_setting("announcement_channel", "") or cfg.OFFICIAL_CHANNEL)
+    rows: list[tuple[str, str, str]] = []
+    if group:
+        rows.append((f"👥 گپ بازی (@{group})", f"https://t.me/{group}", "url"))
+    if channel:
+        rows.append((f"📢 کانال خبری (@{channel})", f"https://t.me/{channel}", "url"))
+    return rows
+
+
+async def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [("🏰 امپراطوری من", "g|emp")],
         [("🎯 ماموریت روزانه", "g|mis"), ("🪙 سکه شاهی", "g|coin")],
-        [("👥 گپ بازی (@WordWarWord)", "https://t.me/WordWarWord", "url"), ("📢 کانال خبری (@Jangjhani313)", "https://t.me/Jangjhani313", "url")],
+        await channel_links(),
         [("📖 راهنمای بازی", "g|guide"), ("🛟 پشتیبانی", "g|sup")],
         [("🔄 تغییر کشور", "g|cchg")],
     ]
+    rows = [r for r in rows if r]
     if is_admin:
-        rows.append([("🛡 پنل ادمین (@agfafagjganigagbot)", "https://t.me/agfafagjganigagbot", "url")])
+        from core import config as cfg
+        handle = _handle(getattr(cfg, "ADMIN_BOT_USERNAME", "") or "agfafagjganigagbot")
+        rows.append([(f"🛡 پنل ادمین (@{handle})", f"https://t.me/{handle}", "url")])
     return kb(rows)
 
 
