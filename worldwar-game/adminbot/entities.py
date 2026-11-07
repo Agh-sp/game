@@ -541,6 +541,9 @@ SETTING_LABELS = {
     "nuclear_leak_chance": "☢️ شانس نشت رادیواکتیو (٪)",
     "nuclear_rebuild_cost": "☢️ هزینهٔ بازسازی تأسیسات",
     "nuclear_site_hp": "☢️ استحکام تأسیسات",
+    "sabotage_cooldown_minutes": "🎯 کول‌داون خرابکاری (دقیقه)",
+    "sabotage_satisfaction_hit": "🎯 افت رضایت مدافع (امتیاز)",
+    "sabotage_wear_add": "🎯 فرسایش اضافه به مدافع (٪)",
     # ── 🕊 آتش‌بس / 🛒 بازار تسلیحات / ☢️ غنی‌سازی ──
     "enrichment_stage_minutes": "☢️ مدت هر مرحلهٔ غنی‌سازی (دقیقه)",
     "ceasefire_offer_hours": "🕊 مهلت پاسخ آتش‌بس (ساعت)",

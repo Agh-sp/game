@@ -409,6 +409,18 @@ CREATE TABLE IF NOT EXISTS arms_deals (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS sabotage_ops (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attacker_id INTEGER,
+  defender_id INTEGER,
+  kind TEXT DEFAULT '',
+  item_id INTEGER DEFAULT 0,
+  success INTEGER DEFAULT 0,
+  note TEXT DEFAULT '',
+  last_at TEXT DEFAULT (datetime('now')),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS internet_infra (
   user_id INTEGER PRIMARY KEY,
   level INTEGER DEFAULT 0,
@@ -708,6 +720,7 @@ ALL_TABLES = [
     "strait_blockades", "rescue_campaigns", "rescue_donations", "oil_offers",
     "currency_requests", "fb_queue", "nuclear_sites", "nuclear_strikes",
     "internet_infra", "country_attrition", "ceasefire_offers", "arms_deals",
+    "sabotage_ops",
 ]
 
 
@@ -1077,6 +1090,10 @@ DEFAULT_SETTINGS = {
     "arms_listing_hours": "48",             # اعتبار آگهی فروش تسلیحات
     # ── ☢️ غنی‌سازی اورانیوم (core/enrichment.py) ──
     "enrichment_stage_minutes": "5",        # مدت هر مرحلهٔ غنی‌سازی به دقیقه
+    # ── 🎯 خرابکاری در تأسیسات (core/sabotage.py) ──
+    "sabotage_cooldown_minutes": "20",      # کول‌داون بین دو خرابکاری (دقیقه)
+    "sabotage_satisfaction_hit": "3",       # افت رضایت مدافع در هر خرابکاری موفق
+    "sabotage_wear_add": "8",               # فرسایش اضافه‌شده به مدافع
     # ── ⚔️ جنگ فرسایشی و نابودی واقعی (core/attrition.py) ──
     "attrition_per_strike": "12",          # فرسایش اضافه‌شده به ازای هر حملهٔ موفق (٪)
     "attrition_failed_strike_share": "0.35",  # سهم فرسایش در حملهٔ ناموفق

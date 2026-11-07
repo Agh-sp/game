@@ -90,6 +90,26 @@ async def war_room(call: CallbackQuery):
                          "(از دکمهٔ «🕊 آتش‌بس و صلح»).")
     except Exception:
         pass
+    # 🎯 خلاصهٔ خرابکاری: خسارت‌های وارده و ابزارهای موجود
+    try:
+        from core import sabotage as _sab
+        left = await _sab.cooldown_left(call.from_user.id)
+        cats = await _sab.weapon_categories(call.from_user.id)
+        tools = " | ".join(
+            label for key, label in (("missile", "🚀 موشک"), ("air", "✈️ هوایی"),
+                                     ("space", "🛰 فضایی"), ("cyber", "🕶 سایبری"))
+            if key in cats)
+        if not tools:
+            lines.append("\n🎯 <b>خرابکاری:</b> برای زدن تأسیسات دشمن به موشک/بمب‌افکن/"
+                         "تسلیحات سایبری نیاز دارید.")
+        elif left:
+            lines.append(f"\n🎯 <b>خرابکاری:</b> ابزارها {tools} | "
+                         f"⏱ کول‌داون {left} دقیقه")
+        else:
+            lines.append(f"\n🎯 <b>خرابکاری آماده است:</b> ابزارها {tools} — "
+                         "هر سازهٔ دشمن را می‌توانید هدف بگیرید.")
+    except Exception:
+        pass
     lines += ["\n" + blocked_banner(state)]
     # ⛓ وضعیت فرسایش کشور خودم (اگر در جنگ کوبیده شده‌ام)
     try:
@@ -109,6 +129,7 @@ async def war_room(call: CallbackQuery):
         [("📢 اعلان جنگ", "g|wdec")],
         [("🗡 حمله (عادی / تسخیر)", "g|watk")],
         [("☢️ هدف قرار دادن تأسیسات هسته‌ای", "g|nuk")],
+        [("🎯 خرابکاری در هر سازهٔ دشمن", "g|sab")],
         [("🕶 سایبری", "g|wcyb")],
         [("🕊 آتش‌بس و صلح", "g|cease")],
         back_row("g|emp"),
