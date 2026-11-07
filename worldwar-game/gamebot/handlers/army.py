@@ -139,7 +139,7 @@ async def base_reject(call: CallbackQuery):
 async def naval_base_candidates(user_id: int) -> list[dict]:
     """کشورهای ساحلی که بازیکن می‌تواند در آن‌ها پایگاه دریایی بسازد."""
     return await db.fetchall(
-        "SELECT c.*, u.id AS owner_uid, u.full_name FROM users u "
+        "SELECT c.*, u.id AS owner_uid, '' AS full_name FROM users u "
         "JOIN countries c ON c.id=u.country_id "
         "WHERE u.id!=? AND u.banned=0 AND c.is_active=1 AND c.has_sea=1 "
         "AND NOT EXISTS (SELECT 1 FROM bases b WHERE b.guest_id=? AND b.host_id=u.id "
@@ -240,7 +240,7 @@ async def naval_base_build(call: CallbackQuery):
 @router.callback_query(F.data == "g|basereq")
 async def base_request_list(call: CallbackQuery):
     countries = await db.fetchall(
-        "SELECT c.*, u.id AS owner_uid, u.full_name FROM users u JOIN countries c ON c.id=u.country_id "
+        "SELECT c.*, u.id AS owner_uid, '' AS full_name FROM users u JOIN countries c ON c.id=u.country_id "
         "WHERE u.id!=? AND u.banned=0 AND c.is_active=1 ORDER BY c.name",
         (call.from_user.id,))
     rows = [[(f"{c['flag']} {c['name']}", f"g|basereqr|{c['owner_uid']}")] for c in countries]

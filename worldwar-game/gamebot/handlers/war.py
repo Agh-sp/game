@@ -66,6 +66,15 @@ async def war_room(call: CallbackQuery):
         for w in wars:
             role = "🗡 مهاجم" if w["attacker_id"] == call.from_user.id else "🛡 مدافع"
             status = "🗳 در رای‌گیری مجوز" if w["status"] == "voting" else "🔥 فعال"
+            # ⛓ میزان فرسایش طرف مقابل — بازیکن می‌بیند چقدر دشمن را در هم شکسته
+            try:
+                from core import attrition as _attr
+                foe = w["defender_id"] if w["attacker_id"] == call.from_user.id else w["attacker_id"]
+                foe_wear = (await _attr.get(foe))["wear"]
+                if foe_wear > 0:
+                    status += f" | ⛓ فرسایش دشمن {foe_wear}٪"
+            except Exception:
+                pass
             crime = " | ⚠️ جنایت جنگی" if w["war_crime"] else ""
             lines.append(
                 f"{role} علیه {w['def_flag'] if w['attacker_id'] == call.from_user.id else w['atk_flag']} "
@@ -73,6 +82,16 @@ async def war_room(call: CallbackQuery):
     else:
         lines.append("در حال حاضر در جنگی نیستید.")
     lines += ["\n" + blocked_banner(state)]
+    # ⛓ وضعیت فرسایش کشور خودم (اگر در جنگ کوبیده شده‌ام)
+    try:
+        from core import attrition as _attr
+        my_wear = await _attr.wear_line(call.from_user.id)
+        if my_wear:
+            lines.append("\n" + my_wear)
+        else:
+            lines.append("\n⛓ <b>امنیت کشور:</b> هیچ فرسایشی ندارید — زیرساخت‌ها سالم‌اند.")
+    except Exception:
+        pass
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb([
         [("📢 اعلان جنگ", "g|wdec")],
@@ -96,7 +115,7 @@ async def enemy_countries(user_id: int) -> list[dict]:
     و جنگ/عملیات سایبری روی آن‌ها ممکن نبود.
     """
     rows = await db.fetchall(
-        "SELECT c.*, u.id AS player_id, u.full_name FROM users u "
+        "SELECT c.*, u.id AS player_id, '' AS full_name FROM users u "
         "JOIN countries c ON c.id = u.country_id "
         "WHERE u.id != ? AND u.banned = 0 AND c.is_active = 1 "
         "ORDER BY c.name", (user_id,))
@@ -115,7 +134,15 @@ async def declare_list(call: CallbackQuery):
     countries = await enemy_countries(call.from_user.id)
     if not countries:
         return await call.answer("کشور دیگری برای جنگ وجود ندارد", show_alert=True)
-    rows = [[(f"{c['flag']} {c['name']}", f"g|wdec|{c['owner_uid']}")] for c in countries]
+    from core import attrition as _attr
+    rows = []
+    for c in countries:
+        try:
+            wear = (await _attr.get(c["owner_uid"]))["wear"]
+        except Exception:
+            wear = 0
+        tag = f" ⛓{wear}٪" if wear > 0 else ""
+        rows.append([(f"{c['flag']} {c['name']}{tag}", f"g|wdec|{c['owner_uid']}")])
     rows.append(back_row("g|war"))
     await call.answer()
     await call.message.edit_text(
@@ -304,7 +331,15 @@ async def attack_wars(call: CallbackQuery):
                 "🗳 مجوز جنگ شما رد شد. یک بار دیگر اعلان جنگ بدهید؛ این‌بار «بدون مجوز» را بزنید تا فوری فعال شود.",
                 show_alert=True)
         return await call.answer("اول باید اعلان جنگ بدهید!", show_alert=True)
-    rows = [[(f"🎯 {w['def_flag']} {w['def_name']}", f"g|watkc|{w['id']}")] for w in wars]
+    from core import attrition as _attr
+    rows = []
+    for w in wars:
+        try:
+            wear = (await _attr.get(w["defender_id"]))["wear"]
+        except Exception:
+            wear = 0
+        tag = f" ⛓ فرسایش {wear}٪" if wear > 0 else ""
+        rows.append([(f"🎯 {w['def_flag']} {w['def_name']}{tag}", f"g|watkc|{w['id']}")])
     rows.append(back_row("g|war"))
     await call.answer()
     await call.message.edit_text("🗡 <b>حمله</b>\n\nجنگ فعال خود را انتخاب کنید:", reply_markup=kb(rows))
@@ -654,6 +689,7 @@ async def attack_go(call: CallbackQuery, state: FSMContext):
 
 
 async def resolve_battle(call, war: dict, plan: dict, atype: str):
+    from core import attrition as attr
     attacker_id, defender_id = war["attacker_id"], war["defender_id"]
     # ⚔️ «حمله به قصد تسخیر» یک حالت است نه یک نوع نیرو: نیروهای انتخاب‌شده
     # تعیین می‌کنند نبرد از چه طریقی انجام شود.
@@ -766,6 +802,13 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     atk_power *= strat["atk"]
     d_def *= strat["def"]
 
+    # ⛓ جنگ فرسایشی: کشور ضعیف‌شده بسیار راحت‌تر در هم می‌شکند
+    wear_before = await attr.wear_of(defender_id)
+    d_def *= await attr.defense_multiplier(defender_id)
+    # 😞 روحیهٔ پایین مدافع، توان حمله مهاجم را هم بالا نمی‌برد ولی دفاع را می‌شکند
+    if wear_before > 0:
+        atk_power *= 1.0 + (wear_before / 100.0) * 0.25
+
     chance = combat.battle_chance(atk_power, d_def)
     won = random.random() < chance
     atk_loss, def_loss = combat.loss_ratios(chance, strat)
@@ -789,14 +832,16 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     atk_destroyed_names, atk_lost_units = await combat.apply_losses(
         attacker_id, atk_rows, atk_loss, "equipment")
     def_destroyed_names, def_lost_units = await combat.apply_losses(
-        defender_id, def_equipment_list, def_loss, "equipment")
+        defender_id, def_equipment_list, def_loss * await attr.loss_multiplier(defender_id),
+        "equipment")
 
     # سربازان دو طرف هم در نبرد کشته می‌شوند
     s_atk, s_atk_units = await combat.apply_soldier_losses(attacker_id, atk_loss * 0.7)
     if s_atk:
         atk_destroyed_names += s_atk
         atk_lost_units += s_atk_units
-    s_def, s_def_units = await combat.apply_soldier_losses(defender_id, def_loss * 0.6)
+    s_def, s_def_units = await combat.apply_soldier_losses(
+        defender_id, def_loss * 0.6 * await attr.loss_multiplier(defender_id))
     if s_def:
         def_destroyed_names += s_def
         def_lost_units += s_def_units
@@ -817,7 +862,16 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
 
     atype_fa = ATTACK_TYPES.get(atype, atype)
 
+    # ⛓ ثبت فرسایش و ریزش روحیه (اثر تجمعی حملات پشت‌سرهم)
+    attrition_lines: list[str] = []
+    try:
+        res = await attr.apply_after_attack(attacker_id, defender_id, won)
+        attrition_lines = res.get("lines") or []
+    except Exception:
+        log.exception("attrition apply failed")
+
     extra_lines = []
+    extra_lines.extend(attrition_lines)
     if intercepted_missiles:
         extra_lines.append(
             f"🛡️ <b>پدافند هوایی مدافع:</b> {round(intercept_rate * 100)}٪ از موشک‌ها و راکت‌های شلیک‌شده "
@@ -874,29 +928,6 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         outcome = f"🛡 <b>{d_country['name']} حمله را دفع کرد</b> — مالکیت و استان‌ها دست‌نخورده ماند."
     extra_lines.insert(0, outcome)
 
-    # 🗺 استان‌ها: هر پیروزی یک استان می‌گیرد و ممکن است کشور سقوط کند
-    province_line = ""
-    try:
-        from core import provinces as prov
-        province_line = await prov.battle_province_effect(
-            call.bot, attacker_id, defender_id,
-            attacker_power=atk_power, defender_power=d_def,
-            won=won, war_id=war.get("id"))
-    except Exception:
-        log.exception("province effect failed")
-    if province_line:
-        extra_lines.append(province_line.strip())
-
-    # 🛡 کمک دفاعی متحدان (اتحاد)
-    try:
-        from core import alliances as al
-        bonus = await al.defense_bonus(defender_id)
-        if bonus["bonus"] > 0 and won:
-            extra_lines.append(
-                f"🤝 متحدان مدافع وارد شدند: {len(bonus['allies'])} متحد با "
-                f"{bonus['percent']}٪ توان دفاعی")
-    except Exception:
-        pass
 
     result_text = combat.battle_report(
         strat=dict(strat, name=f"{strat['name']} ({atype_fa.strip()})"),

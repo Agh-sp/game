@@ -130,6 +130,13 @@ async def defender_can_hold(defender_id: int, attacker_power: float,
     """
     lo = float(await get_setting("province_defense_min_chance", "10")) / 100
     hi = float(await get_setting("province_defense_max_chance", "70")) / 100
+    # ⛓ کشور فرسوده استان را سخت‌تر نگه می‌دارد
+    try:
+        from core import attrition as _attr
+        mult = await _attr.province_defense_multiplier(defender_id)
+        lo, hi = lo * mult, hi * mult
+    except Exception:
+        pass
     if defender_power <= 0 or attacker_power <= 0:
         return False
     ratio = defender_power / attacker_power
@@ -280,6 +287,13 @@ async def battle_province_effect(bot, attacker_id: int, defender_id: int,
     line = (f"\n🗺 <b>استان تصاحب شد:</b> {captured['name']} از {d_name} "
             f"به {a_name} منتقل شد.\n"
             f"🏴 استان‌های شما: <b>{summary['home']}</b> (مجموع {summary['total']})")
+
+    # ⛓ فرسایش با سقوط کامل کشور پاک می‌شود (کشور از نو آغاز می‌کند)
+    try:
+        from core import attrition as _attr
+        await _attr.reset(defender_id)
+    except Exception:
+        pass
 
     collapsed = await check_collapse(defender_id)
     if collapsed:

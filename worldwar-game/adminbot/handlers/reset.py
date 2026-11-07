@@ -236,6 +236,9 @@ async def reset_country_execute(call: CallbackQuery, perms: set):
         "DELETE FROM oil_business WHERE user_id=?",
         "DELETE FROM enrichment WHERE user_id=?",
         "DELETE FROM alliance_members WHERE user_id=?",
+        "DELETE FROM country_attrition WHERE user_id=?",
+        "DELETE FROM nuclear_sites WHERE user_id=?",
+        "DELETE FROM internet_infra WHERE user_id=?",
     ):
         try:
             await db.execute(sql, (uid, uid) if sql.count("?") == 2 else (uid,))

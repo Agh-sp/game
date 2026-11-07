@@ -199,11 +199,14 @@ async def country_display(user_id: int, extended: bool = False) -> str:
         flag = f"{country['flag']}{gov['flag']}"
     main_cur = await get_setting("main_currency", "")
     from core.politics import country_leader, revolution_status
+    from core.privacy import commander_name
     leader = await country_leader(country)
+    # 🔒 حریم خصوصی: نام و آیدی تلگرام نمایش داده نمی‌شود
+    nick = await commander_name(user_id)
     rev = await revolution_status(user_id)
     lines = [
         f"{flag} <b>{country['name']}</b>",
-        f"👤 بازیکن: {user['full_name'] or user['id']}",
+        f"👤 فرمانده: <b>{nick}</b>",
         f"🏛 {leader['title']}: <b>{leader['name']}</b>",
         f"😊 رضایت مردم: <b>{round(state['satisfaction'] or 0)}/100</b>",
         f"💰 خزانه: <b>{fmt_money(user['money'])}</b> (💵 ارز کشور: {state.get('currency_name') or '—'}"

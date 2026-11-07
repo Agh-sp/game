@@ -541,6 +541,16 @@ SETTING_LABELS = {
     "nuclear_leak_chance": "☢️ شانس نشت رادیواکتیو (٪)",
     "nuclear_rebuild_cost": "☢️ هزینهٔ بازسازی تأسیسات",
     "nuclear_site_hp": "☢️ استحکام تأسیسات",
+    # ── ⛓ جنگ فرسایشی ──
+    "attrition_per_strike": "⛓ فرسایش هر حملهٔ موفق (٪)",
+    "attrition_failed_strike_share": "⛓ سهم فرسایش حملهٔ ناموفق",
+    "attrition_max_wear": "⛓ سقف فرسایش (٪)",
+    "attrition_decay_per_hour": "⛓ بازیابی فرسایش در ساعت (٪)",
+    "attrition_defense_penalty": "⛓ ضریب افت توان دفاعی",
+    "attrition_income_penalty": "⛓ ضریب افت درآمد",
+    "attrition_morale_base": "⛓ ریزش پایهٔ رضایت",
+    "attrition_morale_per_wear": "⛓ ریزش رضایت هر درصد فرسایش",
+    "attrition_collapse_threshold": "⛓ آستانهٔ سقوط (٪)",
     # ── 🌐 رفاه اینترنت ──
     "internet_max_level": "🌐 حداکثر سطح اینترنت",
     "internet_upgrade_cost": "🌐 هزینهٔ پایهٔ ارتقای اینترنت",

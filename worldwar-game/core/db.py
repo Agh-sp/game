@@ -378,6 +378,15 @@ CREATE TABLE IF NOT EXISTS nuclear_strikes (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS country_attrition (
+  user_id INTEGER PRIMARY KEY,
+  wear REAL DEFAULT 0,
+  strikes INTEGER DEFAULT 0,
+  last_at TEXT,
+  last_attacker INTEGER,
+  recovering INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS internet_infra (
   user_id INTEGER PRIMARY KEY,
   level INTEGER DEFAULT 0,
@@ -676,7 +685,7 @@ ALL_TABLES = [
     "negotiation_msgs", "treaties", "treaty_confirms", "direct_trades", "straits",
     "strait_blockades", "rescue_campaigns", "rescue_donations", "oil_offers",
     "currency_requests", "fb_queue", "nuclear_sites", "nuclear_strikes",
-    "internet_infra",
+    "internet_infra", "country_attrition",
 ]
 
 
@@ -1035,6 +1044,16 @@ DEFAULT_SETTINGS = {
     "nuclear_leak_chance": "35",      # شانس نشت رادیواکتیو در تخریب کامل (درصد)
     "nuclear_rebuild_cost": "120000000",  # هزینهٔ پایهٔ بازسازی تأسیسات
     "nuclear_site_hp": "100",         # استحکام پایهٔ تأسیسات
+    # ── ⚔️ جنگ فرسایشی و نابودی واقعی (core/attrition.py) ──
+    "attrition_per_strike": "12",          # فرسایش اضافه‌شده به ازای هر حملهٔ موفق (٪)
+    "attrition_failed_strike_share": "0.35",  # سهم فرسایش در حملهٔ ناموفق
+    "attrition_max_wear": "90",            # سقف فرسایش (٪)
+    "attrition_decay_per_hour": "6",       # بازیابی خودکار در هر ساعت (٪)
+    "attrition_defense_penalty": "0.6",    # ضریب کاهش توان دفاعی بر اثر فرسایش
+    "attrition_income_penalty": "1.0",     # ضریب کاهش درآمد بر اثر فرسایش
+    "attrition_morale_base": "3",          # ریزش پایهٔ رضایت در هر حملهٔ موفق
+    "attrition_morale_per_wear": "0.12",   # ریزش اضافه به ازای هر درصد فرسایش
+    "attrition_collapse_threshold": "85",  # آستانهٔ سقوط بر اثر فرسایش (٪)
     # ── 🌐 رفاه اینترنت (core/internet.py) ──
     "internet_max_level": "5",              # حداکثر سطح زیرساخت اینترنت
     "internet_upgrade_cost": "80000000",    # هزینهٔ پایهٔ ارتقای یک سطح (پول)

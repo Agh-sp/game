@@ -340,6 +340,20 @@ async def income_sources(user_id: int) -> dict:
     total = tax["amount"] + oil["amount"] + strait["amount"] + res["amount"]
     # 💵 کف تضمینی درآمد: هیچ کشوری کمتر از این در هر دوره نمی‌گیرد
     # (کشورهایی مثل یونان/افغانستان هم ۱۰۰ میلیون به بالا درآمد دارند)
+    # ⛓ کشور فرسوده اقتصادش افت می‌کند (تا ۸۵٪ کاهش) ولی کف تضمینی حفظ می‌شود
+    try:
+        from core import attrition as _attr
+        wear_mult = await _attr.income_multiplier(user_id)
+        if wear_mult < 1.0:
+            tax = dict(tax)
+            oil = dict(oil)
+            tax["amount"] = int(tax["amount"] * wear_mult)
+            oil["amount"] = int(oil["amount"] * wear_mult)
+            tax["attrition_mult"] = wear_mult
+            total = tax["amount"] + oil["amount"] + strait["amount"] + res["amount"]
+    except Exception:
+        pass
+
     floor_total = int(await _num_setting("income_floor_m", DEFAULT_FLOOR_M) * 1_000_000)
     if total < floor_total:
         tax = dict(tax)
