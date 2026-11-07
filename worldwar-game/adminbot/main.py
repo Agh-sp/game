@@ -25,7 +25,7 @@ async def _on_startup(bot: Bot) -> None:
             BotCommand(command="stats", description="📈 آمار کلی بازی"),
             BotCommand(command="u", description="👤 جستجو و مدیریت کاربر"),
             BotCommand(command="reset_wealth", description="🪙 ریست پول و سکه شاهی همه کاربران"),
-            BotCommand(command="reset_players", description="♻️ ریست همه بازیکنان و کشورها"),
+            BotCommand(command="reset_players", description="🧨 ریست کل بازی (پاک‌سازی ۱۰۰٪ پیشرفت همه)"),
             BotCommand(command="bc", description="📢 ارسال همگانی"),
             BotCommand(command="receipts", description="🧾 بررسی فیش‌ها"),
             BotCommand(command="tickets", description="🎫 تیکت‌های پشتیبانی"),

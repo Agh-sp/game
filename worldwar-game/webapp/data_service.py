@@ -15,7 +15,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from core import config as cfg
+import sys
+from pathlib import Path as _Path
+
+_ROOT = str(_Path(__file__).resolve().parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from core import config as cfg  # noqa: E402
 
 
 def db_path() -> str:
@@ -279,20 +286,25 @@ def _initial_money() -> int:
 
 
 def reset_all_players() -> dict[str, Any]:
+    """🧨 ریست کامل بازی از پنل وب — همان موتور `core.fullreset`.
+
+    پیش‌تر این تابع فقط `states` را پاک می‌کرد؛ نتیجه: ☢️ هسته‌ای، 🛢 ارتقا،
+    🌐 اینترنت، 🗺 استان‌ها و 🎖 تجهیزات باقی می‌ماندند.
+    """
+    from core.fullreset import sync_full_reset
     conn = connect()
     try:
-        conn.execute("DELETE FROM states")
-        conn.commit()
-        users = _rows(conn.execute("SELECT id FROM users"))
-        conn.execute("UPDATE users SET country_id = NULL, country_taken_at = NULL, royal_coins = 0, money = ?",
-                     (_initial_money(),))
-        try:
-            conn.execute("UPDATE countries SET owner_id = NULL, taken_at = NULL")
-        except sqlite3.Error:
-            pass
-        conn.commit()
-        return {"success": True, "message": f"{len(users)} بازیکن ریست شدند و همهٔ کشورها آزاد شدند",
-                "count": len(users)}
+        stats = sync_full_reset(conn, reset_wealth=True, keep_bans=True,
+                                initial_money=_initial_money(), log_errors=True)
+        return {
+            "success": True,
+            "message": (f"{stats['users']} بازیکن به‌طور کامل ریست شدند، "
+                        f"{stats['countries']} کشور آزاد شد و "
+                        f"{stats['cleared']} جدول پاک‌سازی شد"),
+            "count": stats["users"],
+            "tables": stats["cleared"],
+            "countries": stats["countries"],
+        }
     finally:
         conn.close()
 

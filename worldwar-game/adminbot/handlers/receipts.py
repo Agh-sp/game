@@ -249,12 +249,18 @@ async def apply_receipt(r: dict, admin_id: int) -> str:
         cur_owner = country.get("owner_id") if country else None
         # کشور در صورتی قابل واگذاری است که بدون مالک (None یا 0) یا متعلق به خود کاربر باشد
         if country and (not cur_owner or cur_owner == 0 or cur_owner == r["user_id"]):
-            await db.execute("UPDATE countries SET owner_id=? WHERE id=?",
-                             (r["user_id"], country["id"]))
+            await db.execute("UPDATE countries SET owner_id=?, collapsed=0, province_count=5 "
+                             "WHERE id=?", (r["user_id"], country["id"]))
             await db.execute("UPDATE users SET country_id=?, country_taken_at=? WHERE id=?",
                              (country["id"], iso(), r["user_id"]))
             from core.economy import get_state
             await get_state(r["user_id"])
+            # 🗺 استان‌های کشور به خریدار داده می‌شود (وگرنه «سقوط‌کرده» می‌بیند)
+            try:
+                from core.provinces import ensure_country_provinces
+                await ensure_country_provinces(country["id"], r["user_id"], normalize=True)
+            except Exception:
+                pass
             currency = country.get("currency") or country["name"]
             await db.execute(
                 "UPDATE states SET currency_name=?, materials=COALESCE(materials, 0)+1000, "

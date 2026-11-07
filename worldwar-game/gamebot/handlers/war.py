@@ -81,6 +81,15 @@ async def war_room(call: CallbackQuery):
                 f"{w['def_name'] if w['attacker_id'] == call.from_user.id else w['atk_name']} — {status}{crime}")
     else:
         lines.append("در حال حاضر در جنگی نیستید.")
+    # 🕊 پیشنهاد آتش‌بس باز؟
+    try:
+        from core import ceasefire as _cf
+        pend = await _cf.pending_for(call.from_user.id)
+        if pend:
+            lines.append(f"\n🕊 <b>{len(pend)}</b> پیشنهاد آتش‌بس در انتظار پاسخ شماست "
+                         "(از دکمهٔ «🕊 آتش‌بس و صلح»).")
+    except Exception:
+        pass
     lines += ["\n" + blocked_banner(state)]
     # ⛓ وضعیت فرسایش کشور خودم (اگر در جنگ کوبیده شده‌ام)
     try:
@@ -93,11 +102,15 @@ async def war_room(call: CallbackQuery):
     except Exception:
         pass
     await call.answer()
-    await call.message.edit_text("\n".join(lines), reply_markup=kb([
+    text = "\n".join(lines)
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    await call.message.edit_text(text, reply_markup=kb([
         [("📢 اعلان جنگ", "g|wdec")],
         [("🗡 حمله (عادی / تسخیر)", "g|watk")],
         [("☢️ هدف قرار دادن تأسیسات هسته‌ای", "g|nuk")],
         [("🕶 سایبری", "g|wcyb")],
+        [("🕊 آتش‌بس و صلح", "g|cease")],
         back_row("g|emp"),
     ]))
 
@@ -1313,3 +1326,126 @@ async def nuclear_rebuild(call: CallbackQuery):
     ok, msg = await nuclear.rebuild(call.from_user.id)
     await call.answer("🔧" if ok else "❌", show_alert=not ok)
     await call.message.edit_text(msg, reply_markup=kb([back_row("g|nuk")]))
+
+
+# ═══════════ 🕊 آتش‌بس، صلح و تسلیم ═══════════
+
+
+@router.callback_query(F.data == "g|cease")
+async def ceasefire_menu(call: CallbackQuery):
+    """🕊 پیشنهاد/پاسخ آتش‌بس و امکان تسلیم."""
+    from core import ceasefire as cf
+    from core import attrition as attr
+
+    # ⏳ بستن پیشنهادهای منقضی‌شده
+    try:
+        await db.execute(
+            "UPDATE ceasefire_offers SET status='expired' WHERE status='pending' "
+            "AND ends_at IS NOT NULL AND ends_at<=?", (iso(),))
+    except Exception:
+        pass
+
+    incoming = await cf.pending_for(call.from_user.id)
+    wars = await cf.wars_of(call.from_user.id)
+
+    lines = ["🕊 <b>آتش‌بس و صلح</b>\n"]
+    if incoming:
+        lines.append("📨 <b>پیشنهادهای رسیده:</b>")
+        for off in incoming:
+            from core.economy import get_country
+            who = await get_country(off["from_id"])
+            name = f"{who['flag']} {who['name']}" if who else "طرف مقابل"
+            lines.append(f"  • از {name} — منتظر پاسخ شما")
+        lines.append("")
+    if wars:
+        lines.append("⚔️ <b>جنگ‌های فعال شما:</b>")
+        for w in wars:
+            wear = await attr.wear_of(w["foe"])
+            role = "🗡 مهاجم" if w["role"] == "attacker" else "🛡 مدافع"
+            off = await cf.pending_offer(w["id"])
+            state_txt = " | 🕊 پیشنهاد باز" if off else ""
+            lines.append(f"  • {role} با {w['foe_flag']} {w['foe_name']} — "
+                         f"⛓ فرسایش دشمن {wear}٪{state_txt}")
+        lines.append("")
+    else:
+        lines.append("در حال حاضر جنگ فعالی ندارید — نیازی به آتش‌بس نیست.\n")
+
+    my_wear = await attr.wear_of(call.from_user.id)
+    if my_wear > 0:
+        lines.append(f"⛓ فرسایش کشور خودتان: <b>{my_wear}٪</b>")
+    lines += ["", "💡 آتش‌بس با پذیرش طرف مقابل، جنگ را تمام و فرسایش هر دو "
+                  "کشور را صفر می‌کند. اگر کاملاً در هم شکسته‌اید می‌توانید "
+                  "🏳 تسلیم شوید (چند استان از دست می‌دهید)."]
+
+    rows = []
+    for w in wars:
+        rows.append([(f"🕊 پیشنهاد آتش‌بس به {w['foe_flag']} {w['foe_name']}",
+                      f"g|ceasego|{w['foe']}")])
+    for off in incoming:
+        rows.append([(f"✅ پذیرش آتش‌بس #{off['id']}", f"g|ceaseacc|{off['id']}")])
+        rows.append([(f"❌ رد آتش‌بس #{off['id']}", f"g|ceaserej|{off['id']}")])
+    ok_sur, _r = await cf.can_surrender(call.from_user.id) if wars else (False, "")
+    if ok_sur:
+        rows.append([("🏳 تسلیم و پایان جنگ", "g|surrgo")])
+    rows.append(back_row("g|war"))
+    await call.answer()
+    await call.message.edit_text("\n".join(lines), reply_markup=kb(rows))
+
+
+@router.callback_query(F.data.startswith("g|ceasego|"))
+async def ceasefire_offer(call: CallbackQuery):
+    from core import ceasefire as cf
+    foe = int(call.data.split("|")[2])
+    ok, msg = await cf.offer(call.from_user.id, foe)
+    if not ok:
+        return await call.answer(msg[:190], show_alert=True)
+    await call.answer("🕊 پیشنهاد ارسال شد")
+    try:
+        await dm(call.bot, foe,
+                 "🕊 <b>پیشنهاد آتش‌بس</b>\n\nطرف مقابل پیشنهاد آتش‌بس داده است.\n"
+                 "از ⚔️ اتاق جنگ → 🕊 آتش‌بس پاسخ دهید.",
+                 reply_markup=None)
+    except Exception:
+        pass
+    await call.message.edit_text(msg, reply_markup=kb([back_row("g|cease",
+                                                                "◀️ آتش‌بس")]))
+
+
+@router.callback_query(F.data.startswith("g|ceaseacc|"))
+async def ceasefire_accept(call: CallbackQuery):
+    from core import ceasefire as cf
+    oid = int(call.data.split("|")[2])
+    ok, msg = await cf.accept(oid, call.from_user.id, call.bot)
+    if not ok:
+        return await call.answer(msg[:190], show_alert=True)
+    await call.answer("🕊 آتش‌بس امضا شد")
+    await call.message.edit_text(msg, reply_markup=kb([back_row("g|war")]))
+
+
+@router.callback_query(F.data.startswith("g|ceaserej|"))
+async def ceasefire_reject(call: CallbackQuery):
+    from core import ceasefire as cf
+    oid = int(call.data.split("|")[2])
+    ok, msg = await cf.reject(oid, call.from_user.id)
+    await call.answer("❌ رد شد" if ok else msg[:190], show_alert=not ok)
+    if ok:
+        await call.message.edit_text(msg, reply_markup=kb([back_row("g|cease",
+                                                                    "◀️ آتش‌بس")]))
+
+
+@router.callback_query(F.data == "g|surrgo")
+async def surrender_execute(call: CallbackQuery):
+    from core import ceasefire as cf
+    ok, err = await cf.can_surrender(call.from_user.id)
+    if not ok:
+        return await call.answer(err[:190], show_alert=True)
+    war = await db.fetchone(
+        "SELECT * FROM wars WHERE status='active' AND defender_id=? "
+        "ORDER BY id DESC LIMIT 1", (call.from_user.id,))
+    if not war:
+        return await call.answer("❌ جنگ فعالی برای تسلیم یافت نشد", show_alert=True)
+    ok, msg = await cf.surrender(war, call.from_user.id, call.bot)
+    if not ok:
+        return await call.answer(msg[:190], show_alert=True)
+    await call.answer("🏳 تسلیم شد")
+    await call.message.edit_text(msg, reply_markup=kb([back_row("g|war")]))

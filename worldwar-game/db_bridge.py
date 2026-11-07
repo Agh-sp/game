@@ -13,6 +13,9 @@ import urllib.error
 from datetime import datetime
 
 DB_PATH = os.path.abspath(os.environ.get('DB_PATH') or os.path.join(os.path.dirname(__file__), 'wwgame.db'))
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
 
 def load_env():
@@ -519,39 +522,33 @@ def delete_user(user_id):
     return {"success": True, "message": f"کاربر {user_id} حذف شد"}
 
 def reset_all_players():
+    """🧨 ریست کامل بازی — از موتور مشترک `core.fullreset` استفاده می‌کند.
+
+    نسخهٔ قبلی فقط چند جدول را پاک می‌کرد؛ ☢️ هسته‌ای، 🛢 ارتقا، 🌐 اینترنت،
+    🗺 استان‌ها و ⛓ فرسایش باقی می‌ماندند و کشور تازهٔ بازیکن «سقوط‌کرده»
+    نمایش داده می‌شد.
+    """
+    from core.fullreset import sync_full_reset
+
     conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users")
-    total_users = cur.fetchone()[0]
-    
-    # 1. Free all countries
-    cur.execute("UPDATE countries SET owner_id = NULL")
-    
-    # 2. Reset users table (بودجه اولیه از تنظیمات بازی خوانده می‌شود)
-    cur.execute("UPDATE users SET country_id = NULL, country_taken_at = NULL, royal_coins = 0, money = ?, banned = 0",
-                (get_initial_money(),))
-    
-    # 3. Clean gameplay tables
-    tables = [
-        "player_assets", "player_projects", "soldier_trainings", "companies",
-        "bases", "states", "treaties", "strait_blockades", "wars",
-        "war_alliances", "market_orders", "currency_requests"
-    ]
-    for tbl in tables:
-        try:
-            cur.execute(f"DELETE FROM {tbl}")
-        except Exception:
-            pass
-            
-    conn.commit()
-    conn.close()
-    
+    try:
+        stats = sync_full_reset(conn, reset_wealth=True, keep_bans=True,
+                                initial_money=get_initial_money(), log_errors=True)
+    finally:
+        conn.close()
+
     try:
         firebase_request('DELETE', 'game/states')
     except Exception:
         pass
-        
-    return {"success": True, "message": f"تمام بازیکنان ({total_users} نفر) ریست شدند و تمام کشورها آزاد گردیدند", "count": total_users}
+
+    return {
+        "success": True,
+        "message": (f"تمام بازیکنان ({stats['users']} نفر) به‌طور کامل ریست شدند و "
+                    f"{stats['countries']} کشور آزاد گردید ({stats['cleared']} جدول پاک شد)"),
+        "count": stats["users"],
+        "tables": stats["cleared"],
+    }
 
 def reset_all_wealth(mode='both_default'):
     conn = get_conn()

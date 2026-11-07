@@ -541,6 +541,15 @@ SETTING_LABELS = {
     "nuclear_leak_chance": "☢️ شانس نشت رادیواکتیو (٪)",
     "nuclear_rebuild_cost": "☢️ هزینهٔ بازسازی تأسیسات",
     "nuclear_site_hp": "☢️ استحکام تأسیسات",
+    # ── 🕊 آتش‌بس / 🛒 بازار تسلیحات / ☢️ غنی‌سازی ──
+    "enrichment_stage_minutes": "☢️ مدت هر مرحلهٔ غنی‌سازی (دقیقه)",
+    "ceasefire_offer_hours": "🕊 مهلت پاسخ آتش‌بس (ساعت)",
+    "ceasefire_cooldown_hours": "🕊 فاصلهٔ پیشنهاد آتش‌بس (ساعت)",
+    "attrition_surrender_threshold": "🏳 حداقل فرسایش برای تسلیم (٪)",
+    "surrender_provinces": "🏳 استان‌های واگذارشده در تسلیم",
+    "arms_commission_percent": "🛒 کمیسیون بازار تسلیحات (٪)",
+    "arms_max_quantity": "🛒 حداکثر تعداد هر معامله",
+    "arms_listing_hours": "🛒 اعتبار آگهی تسلیحات (ساعت)",
     # ── ⛓ جنگ فرسایشی ──
     "attrition_per_strike": "⛓ فرسایش هر حملهٔ موفق (٪)",
     "attrition_failed_strike_share": "⛓ سهم فرسایش حملهٔ ناموفق",

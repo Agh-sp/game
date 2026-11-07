@@ -387,6 +387,28 @@ CREATE TABLE IF NOT EXISTS country_attrition (
   recovering INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS ceasefire_offers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  war_id INTEGER,
+  from_id INTEGER,
+  to_id INTEGER,
+  status TEXT DEFAULT 'pending',
+  ends_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS arms_deals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  seller_id INTEGER,
+  buyer_id INTEGER,
+  item_type TEXT,
+  item_id INTEGER,
+  quantity INTEGER DEFAULT 0,
+  unit_price INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS internet_infra (
   user_id INTEGER PRIMARY KEY,
   level INTEGER DEFAULT 0,
@@ -685,7 +707,7 @@ ALL_TABLES = [
     "negotiation_msgs", "treaties", "treaty_confirms", "direct_trades", "straits",
     "strait_blockades", "rescue_campaigns", "rescue_donations", "oil_offers",
     "currency_requests", "fb_queue", "nuclear_sites", "nuclear_strikes",
-    "internet_infra", "country_attrition",
+    "internet_infra", "country_attrition", "ceasefire_offers", "arms_deals",
 ]
 
 
@@ -1044,6 +1066,17 @@ DEFAULT_SETTINGS = {
     "nuclear_leak_chance": "35",      # شانس نشت رادیواکتیو در تخریب کامل (درصد)
     "nuclear_rebuild_cost": "120000000",  # هزینهٔ پایهٔ بازسازی تأسیسات
     "nuclear_site_hp": "100",         # استحکام پایهٔ تأسیسات
+    # ── 🕊 آتش‌بس و صلح (core/ceasefire.py) ──
+    "ceasefire_offer_hours": "24",          # مهلت پاسخ به پیشنهاد آتش‌بس
+    "ceasefire_cooldown_hours": "6",        # فاصلهٔ مجاز بین دو پیشنهاد آتش‌بس
+    "attrition_surrender_threshold": "60",  # حداقل فرسایش برای مجاز بودن تسلیم
+    "surrender_provinces": "2",             # تعداد استانی که در تسلیم واگذار می‌شود
+    # ── 🛒 بازار تسلیحات (core/arms.py) ──
+    "arms_commission_percent": "5",         # کمیسیون بازار تسلیحات
+    "arms_max_quantity": "5000",            # حداکثر تعداد هر معاملهٔ تسلیحات
+    "arms_listing_hours": "48",             # اعتبار آگهی فروش تسلیحات
+    # ── ☢️ غنی‌سازی اورانیوم (core/enrichment.py) ──
+    "enrichment_stage_minutes": "5",        # مدت هر مرحلهٔ غنی‌سازی به دقیقه
     # ── ⚔️ جنگ فرسایشی و نابودی واقعی (core/attrition.py) ──
     "attrition_per_strike": "12",          # فرسایش اضافه‌شده به ازای هر حملهٔ موفق (٪)
     "attrition_failed_strike_share": "0.35",  # سهم فرسایش در حملهٔ ناموفق

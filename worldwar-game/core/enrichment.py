@@ -13,14 +13,33 @@ from core.utils import fmt_money, iso, is_past
 
 log = logging.getLogger(__name__)
 
-# (stage, عنوان, درصد, هزینه پول, هزینه مصالح, هزینه سکه, مدت ساعت)
+# مدت هر مرحله به دقیقه (قابل تغییر از پنل ادمین با کلید `enrichment_stage_minutes`)
+DEFAULT_STAGE_MINUTES = 5        # ⏱ ۵ دقیقه — به‌درخواست کاربر
+MAX_STAGE = 4
+
+# (stage, عنوان, درصد, هزینه پول, هزینه مصالح, هزینه سکه)
 STAGES = [
-    (1, "غنی‌سازی ۳٫۵٪ (سوخت نیروگاه)", "۳٫۵٪", 60_000_000, 2_000, 0, 2),
-    (2, "غنی‌سازی ۲۰٪ (سوخت راکتور)", "۲۰٪", 150_000_000, 5_000, 0, 4),
-    (3, "غنی‌سازی ۶۰٪ (درجه نظامی)", "۶۰٪", 400_000_000, 12_000, 5, 8),
-    (4, "غنی‌سازی ۹۰٪ (کلاهک هسته‌ای)", "۹۰٪", 900_000_000, 25_000, 15, 12),
+    (1, "غنی‌سازی ۳٫۵٪ (سوخت نیروگاه)", "۳٫۵٪", 60_000_000, 2_000, 0),
+    (2, "غنی‌سازی ۲۰٪ (سوخت راکتور)", "۲۰٪", 150_000_000, 5_000, 0),
+    (3, "غنی‌سازی ۶۰٪ (درجه نظامی)", "۶۰٪", 400_000_000, 12_000, 5),
+    (4, "غنی‌سازی ۹۰٪ (کلاهک هسته‌ای)", "۹۰٪", 900_000_000, 25_000, 15),
 ]
-MAX_STAGE = STAGES[-1][0]
+
+
+async def stage_minutes() -> int:
+    """⏱ مدت هر مرحلهٔ غنی‌سازی به دقیقه (پیش‌فرض ۵، از پنل ادمین قابل تغییر)."""
+    try:
+        raw = await get_setting("enrichment_stage_minutes", str(DEFAULT_STAGE_MINUTES))
+        return max(1, int(float(str(raw).strip() or DEFAULT_STAGE_MINUTES)))
+    except (TypeError, ValueError):
+        return DEFAULT_STAGE_MINUTES
+
+
+def _fmt_duration(minutes: int) -> str:
+    if minutes < 60:
+        return f"{minutes} دقیقه"
+    h, m = divmod(minutes, 60)
+    return f"{h} ساعت" + (f" و {m} دقیقه" if m else "")
 
 
 def stage_info(stage: int) -> tuple | None:
@@ -28,6 +47,22 @@ def stage_info(stage: int) -> tuple | None:
         if s[0] == stage:
             return s
     return None
+
+
+def _minutes_left(completes_at: str | None) -> str:
+    """متن زمان باقی‌مانده (دقیقه:ثانیه) تا تکمیل یک مرحله."""
+    if not completes_at:
+        return "—"
+    try:
+        from core.utils import parse, now
+        then = parse(completes_at)
+        if not then:
+            return "—"
+        secs = int(max(0, (then - now()).total_seconds()))
+        m, s = divmod(secs, 60)
+        return f"{m}:{s:02d}"
+    except Exception:
+        return "—"
 
 
 async def get_state(user_id: int) -> dict:
@@ -56,7 +91,7 @@ async def can_start(user_id: int, stage: int) -> tuple[bool, str]:
     info = stage_info(stage)
     if not info:
         return False, "❌ مرحلهٔ نامعتبر."
-    _s, title, _pct, cost_money, cost_mat, cost_coins, _hours = info
+    _s, title, _pct, cost_money, cost_mat, cost_coins = info
     user = await db.fetchone("SELECT money FROM users WHERE id=?", (user_id,))
     money = int((user or {}).get("money") or 0)
     if money < cost_money:
@@ -76,21 +111,29 @@ async def start_stage(user_id: int, stage: int) -> tuple[bool, str]:
     if not ok:
         return False, err
     info = stage_info(stage)
-    _s, title, _pct, cost_money, cost_mat, cost_coins, hours = info
+    _s, title, _pct, cost_money, cost_mat, cost_coins = info
     await db.execute("UPDATE users SET money=money-? WHERE id=?", (cost_money, user_id))
     await db.execute("UPDATE states SET materials=MAX(0,materials-?) WHERE user_id=?",
                      (cost_mat, user_id))
     if cost_coins:
         await db.execute("UPDATE users SET royal_coins=MAX(0,royal_coins-?) WHERE id=?",
                          (cost_coins, user_id))
+    minutes = await stage_minutes()
     now = datetime.now(timezone.utc)
-    completes = (now + timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    completes_dt = now + timedelta(minutes=minutes)
+    completes = completes_dt.strftime("%Y-%m-%d %H:%M:%S")
     await db.execute(
         "UPDATE enrichment SET started_at=?, completes_at=? WHERE user_id=?",
         (iso(now), completes, user_id))
+    try:
+        from core.events import log_event
+        await log_event("science", f"☢️ {title} آغاز شد ({minutes} دقیقه)")
+    except Exception:
+        pass
     return True, (f"☢️ <b>{title}</b> آغاز شد.\n"
-                  f"⏳ زمان تکمیل: <b>{hours} ساعت</b>\n"
-                  f"📅 اتمام: {completes} (UTC)")
+                  f"⏳ زمان تکمیل: <b>{_fmt_duration(minutes)}</b>\n"
+                  f"📅 اتمام: {completes} (UTC)\n\n"
+                  "💡 می‌توانید ربات را ببندید؛ تکمیل خودکار ثبت می‌شود.")
 
 
 async def settle(user_id: int) -> dict | None:
@@ -180,9 +223,12 @@ async def enrichment_text(user_id: int) -> str:
              f"📊 پیشرفت شما: <b>{current}/{MAX_STAGE}</b>\n"]
     running = await in_progress(user_id)
     if running:
-        lines.append(f"⏳ مرحلهٔ در جریان تا <b>{st['completes_at']}</b> (UTC) تمام می‌شود.\n")
+        left = _minutes_left(st.get("completes_at"))
+        lines.append(f"⏳ مرحلهٔ در جریان — <b>{left}</b> باقی مانده "
+                     f"(پایان: {st['completes_at']} UTC)\n")
+    minutes = await stage_minutes()
     for s in STAGES:
-        idx, title, pct, cost_money, cost_mat, cost_coins, hours = s
+        idx, title, pct, cost_money, cost_mat, cost_coins = s
         if idx <= current:
             mark = "✅"
         elif idx == current + 1:
@@ -195,7 +241,7 @@ async def enrichment_text(user_id: int) -> str:
         if cost_coins:
             cost += f" + {cost_coins} سکه"
         lines.append(f"{mark} <b>مرحله {idx}:</b> {title}\n"
-                     f"     💰 {cost} • ⏱ {hours} ساعت")
+                     f"     💰 {cost} • ⏱ {_fmt_duration(minutes)}")
     if current >= MAX_STAGE:
         lines.append("\n🏆 <b>شما به بالاترین مرحلهٔ غنی‌سازی (۹۰٪) رسیده‌اید.</b>")
     else:

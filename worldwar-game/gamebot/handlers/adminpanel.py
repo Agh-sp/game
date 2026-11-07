@@ -128,8 +128,9 @@ async def panel_text(user_id: int) -> str:
     )
 
 
-def panel_kb() -> object:
-    return kb([
+def panel_kb(superadmin: bool = False) -> object:
+    """کیبورد پنل؛ `superadmin` برای سازگاری عقب‌رو نگه داشته شده است."""
+    rows = [
         [("💰 واریز پول", "p|op|money_add"), ("💸 برداشت پول", "p|op|money_sub")],
         [("🪙 دادن سکه", "p|op|coin_add"), ("🔻 گرفتن سکه", "p|op|coin_sub")],
         [("📈 افزایش رضایت", "p|op|sat_add"), ("📉 کاهش رضایت", "p|op|sat_sub")],
@@ -139,8 +140,10 @@ def panel_kb() -> object:
         [("🧾 فیش‌های منتظر", "p|rec"), ("📢 پیام همگانی", "p|bc")],
         [("📜 لاگ فیش و کاربران", "p|logs"), ("👑 مدیریت ادمین‌ها", "p|admins")],
         [("⚙️ تنظیمات سریع", "p|setmenu")],
-        home_row(),
-    ])
+        [("🧨 ریست کل بازی (پاک‌سازی ۱۰۰٪)", "p|resetmenu")],
+    ]
+    rows.append(home_row())
+    return kb(rows)
 
 
 @router.message(Command("panel"))
@@ -148,7 +151,8 @@ async def panel_command(message: Message, state: FSMContext):
     if not await _guard(message):
         return
     await state.clear()
-    await send_home(message, await panel_text(message.from_user.id), reply_markup=panel_kb())
+    await send_home(message, await panel_text(message.from_user.id),
+                    reply_markup=panel_kb(await is_super_admin(message.from_user.id)))
 
 
 @router.callback_query(F.data == "p|home")
@@ -157,10 +161,13 @@ async def panel_home(call: CallbackQuery, state: FSMContext):
         return
     await state.clear()
     await call.answer()
+    superadmin = await is_super_admin(call.from_user.id)
     try:
-        await call.message.edit_text(await panel_text(call.from_user.id), reply_markup=panel_kb())
+        await call.message.edit_text(await panel_text(call.from_user.id),
+                                     reply_markup=panel_kb(superadmin))
     except Exception:
-        await send_home(call.message, await panel_text(call.from_user.id), reply_markup=panel_kb())
+        await send_home(call.message, await panel_text(call.from_user.id),
+                        reply_markup=panel_kb(superadmin))
 
 
 # ─── شروع عملیات‌ها ───
@@ -422,12 +429,18 @@ async def panel_receipt_action(call: CallbackQuery):
         country = await db.fetchone("SELECT * FROM countries WHERE id=?", (r["country_id"] or 0,))
         cur_owner = (country or {}).get("owner_id")
         if country and (not cur_owner or cur_owner == r["user_id"]):
-            await db.execute("UPDATE countries SET owner_id=? WHERE id=?",
-                             (r["user_id"], country["id"]))
+            await db.execute("UPDATE countries SET owner_id=?, collapsed=0, province_count=5 "
+                             "WHERE id=?", (r["user_id"], country["id"]))
             await db.execute("UPDATE users SET country_id=?, country_taken_at=? WHERE id=?",
                              (country["id"], iso(), r["user_id"]))
             from core.economy import get_state
             await get_state(r["user_id"])
+            # 🗺 استان‌های کشور به خریدار داده می‌شود (وگرنه «سقوط‌کرده» می‌بیند)
+            try:
+                from core.provinces import ensure_country_provinces
+                await ensure_country_provinces(country["id"], r["user_id"], normalize=True)
+            except Exception:
+                pass
             await db.execute(
                 "UPDATE states SET currency_name=?, materials=COALESCE(materials,0)+1000, "
                 "energy=COALESCE(energy,0)+5000, water=COALESCE(water,0)+5000, "
@@ -618,3 +631,117 @@ async def panel_admin_del(call: CallbackQuery):
         return await call.answer("سوپرادمین ثابت کانفیگ حذف‌شدنی نیست.", show_alert=True)
     await call.answer("🗑 دسترسی ادمین گرفته شد")
     await panel_admins(call)
+
+
+# ═══════════════ 🧨 ریست کامل (پاک‌سازی ۱۰۰٪ پیشرفت بازیکنان) ═══════════════
+#
+# باگ گزارش‌شده: پس از ریست، ☢️ تأسیسات هسته‌ای، 🛢 سطح تجهیزات استخراج،
+# 🌐 اینترنت و 🗺 استان‌ها باقی می‌ماندند و کشور تازه «سقوط‌کرده» دیده می‌شد.
+# این بخش از موتور مشترک `core.fullreset` استفاده می‌کند تا هیچ داده‌ای جا نماند.
+
+async def _reset_preview() -> str:
+    """خلاصهٔ وضعیت فعلی برای صفحهٔ تأیید ریست."""
+    u_total = (await db.fetchone("SELECT COUNT(*) c FROM users"))["c"]
+    taken = (await db.fetchone(
+        "SELECT COUNT(*) c FROM users WHERE country_id IS NOT NULL"))["c"]
+    assets = (await db.fetchone(
+        "SELECT COALESCE(SUM(quantity),0) c FROM player_assets"))["c"]
+    enrich = (await db.fetchone("SELECT COUNT(*) c FROM enrichment"))["c"]
+    nukes = (await db.fetchone(
+        "SELECT COUNT(*) c FROM nuclear_sites WHERE active=1"))["c"]
+    oil = (await db.fetchone(
+        "SELECT COALESCE(SUM(level),0) c FROM oil_business"))["c"]
+    net = (await db.fetchone(
+        "SELECT COALESCE(SUM(level),0) c FROM internet_infra"))["c"]
+    provs = (await db.fetchone(
+        "SELECT COUNT(*) c FROM provinces WHERE owner_id IS NOT NULL"))["c"]
+    wars = (await db.fetchone(
+        "SELECT COUNT(*) c FROM wars WHERE status='active'"))["c"]
+    coins = (await db.fetchone(
+        "SELECT COALESCE(SUM(royal_coins),0) c FROM users"))["c"]
+    money = (await db.fetchone(
+        "SELECT COALESCE(SUM(money),0) c FROM users"))["c"]
+    return (
+        "🧨 <b>ریست کامل بازی (پاک‌سازی ۱۰۰٪)</b>\n\n"
+        "این عملیات <b>همهٔ پیشرفت بازیکنان</b> را پاک می‌کند و بازی از صفر شروع می‌شود:\n\n"
+        f"👥 بازیکنان: <b>{fmt(u_total)}</b> | 🏳 کشورهای واگذارشده: <b>{fmt(taken)}</b>\n"
+        f"🎖 تجهیزات و سربازان: <b>{fmt(assets)}</b> واحد\n"
+        f"☢️ تأسیسات هسته‌ای فعال: <b>{fmt(nukes)}</b> | 🧬 ردیف غنی‌سازی: <b>{fmt(enrich)}</b>\n"
+        f"🛢 مجموع سطح دکل‌های نفتی: <b>{fmt(oil)}</b> | "
+        f"🌐 مجموع سطح اینترنت: <b>{fmt(net)}</b>\n"
+        f"🗺 استان‌های در اختیار بازیکنان: <b>{fmt(provs)}</b> | "
+        f"⚔️ جنگ‌های فعال: <b>{fmt(wars)}</b>\n"
+        f"🪙 مجموع سکه شاهی: <b>{fmt(coins)}</b> | 💰 مجموع خزانه‌ها: <b>{fmt_money(money)}</b>\n\n"
+        "⚠️ <b>چه چیزی پاک می‌شود:</b>\n"
+        "• تجهیزات، سربازان، پروژه‌ها، شرکت‌ها، پایگاه‌ها و دکل‌های نفتی\n"
+        "• ☢️ همهٔ تأسیسات هسته‌ای و پیشرفت غنی‌سازی\n"
+        "• 🌐 سطوح اینترنت، 🛢 سطح تجهیزات استخراج و ⛓ فرسایش جنگ\n"
+        "• 🗺 همهٔ استان‌های تصاحب‌شده، جنگ‌ها، پیمان‌ها، اتحادها، انقلاب‌ها و تنگه‌ها\n"
+        "• 🪙 سکه شاهی، 💰 خزانه، رضایت مردم، دین و حکومت\n"
+        "• 🏳 کشورها به حالت آزاد با ۵ استان پایه برمی‌گردند و همه می‌توانند\n"
+        "  کشور تازه انتخاب کنند.\n\n"
+        "✅ <b>چه چیزی می‌ماند:</b> حساب‌های تلگرام، لیست ادمین‌ها، تنظیمات بازی،\n"
+        "فیش‌های مالی و لاگ‌ها.\n\n"
+        "آیا از ریست کامل صد‌درصدی مطمئن هستید؟"
+    )
+
+
+async def _reset_kb() -> object:
+    return kb([
+        [("⚠️ بله، همه چیز را از صفر کن", "p|resetall")],
+        [("🏰 بازگشت به پنل", "p|home")],
+        home_row(),
+    ])
+
+
+@router.callback_query(F.data == "p|resetmenu")
+async def panel_reset_menu(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    if not await is_super_admin(call.from_user.id):
+        return await call.answer("⛔️ فقط سوپرادمین می‌تواند بازی را ریست کند.", show_alert=True)
+    await call.answer()
+    try:
+        await call.message.edit_text(await _reset_preview(), reply_markup=await _reset_kb())
+    except Exception:
+        await send_home(call.message, await _reset_preview(), reply_markup=await _reset_kb())
+
+
+@router.callback_query(F.data == "p|resetall")
+async def panel_reset_execute(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    if not await is_super_admin(call.from_user.id):
+        return await call.answer("⛔️ فقط سوپرادمین می‌تواند بازی را ریست کند.", show_alert=True)
+    from core.fullreset import full_reset
+    await call.answer("⏳ در حال ریست کامل بازی…")
+    try:
+        await call.message.edit_text("⏳ <b>ریست کامل در حال انجام است…</b>\n"
+                                     "همهٔ داده‌های بازیکنان در حال پاک‌سازی است.")
+    except Exception:
+        pass
+    stats = await full_reset(reset_wealth=True, keep_bans=True, log_errors=True)
+    await db.execute(
+        "INSERT INTO admin_logs(admin_id, action, detail) VALUES(?, 'ریست', ?)",
+        (call.from_user.id,
+         f"ریست کامل بازی: {stats['users']} کاربر، {stats['countries']} کشور، "
+         f"{stats['tables']} جدول پاک شد"))
+    text = (
+        "🎉 <b>ریست کامل بازی انجام شد!</b>\n\n"
+        f"👥 بازیکنان ریست‌شده: <b>{fmt(stats['users'])}</b>\n"
+        f"🏳 کشورهای آزادشده: <b>{fmt(stats['countries'])}</b>\n"
+        f"🎖 تجهیزات پاک‌شده: <b>{fmt(stats['assets'])}</b> واحد\n"
+        f"🗄 جدول‌های پاک‌شده: <b>{fmt(stats['tables'])}</b>\n\n"
+        f"💰 بودجهٔ اولیهٔ هر بازیکن: <b>{fmt_money(stats['initial_money'])}</b>\n"
+        "🗺 همهٔ کشورها ۵ استان پایه دارند و آزاد هستند.\n"
+        "همهٔ بازیکنان می‌توانند با /start کشور تازه بگیرند — "
+        "☢️ هسته‌ای، 🛢 ارتقا و 🗺 استان‌ها دیگر باقی نمانده‌اند."
+    )
+    markup = kb([
+        [("🏳 کشورها و قیمت‌ها", "p|home")],
+        home_row(),
+    ])
+    try:
+        await call.message.edit_text(text, reply_markup=markup)
+    except Exception:
+        await send_home(call.message, text, reply_markup=markup)
