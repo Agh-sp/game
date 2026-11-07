@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from core.db import db, get_initial_money, get_setting
 from core.economy import bump_progress, get_state
 from core.utils import fmt, fmt_hm, iso
+from core.provinces import BASE_PROVINCES, ensure_country_provinces
 from gamebot.common import check_membership, join_keyboard, kb, main_menu_kb, send_home
 
 router = Router()
@@ -186,12 +187,19 @@ async def assign_country(user_id: int, country: dict, notify_text: str, bot=None
     if not cur or cur["owner_id"]:
         return False
     rows = await db.execute(
-        "UPDATE countries SET owner_id=? WHERE id=? AND (owner_id IS NULL OR owner_id=0)",
-        (user_id, country["id"])
+        "UPDATE countries SET owner_id=?, collapsed=0, province_count=? "
+        "WHERE id=? AND (owner_id IS NULL OR owner_id=0)",
+        (user_id, BASE_PROVINCES, country["id"])
     )
     await db.execute("UPDATE users SET country_id=?, country_taken_at=? WHERE id=?",
                      (country["id"], iso(), user_id))
     await get_state(user_id)  # ساخت ردیف states
+    # 🗺 استان‌های کشور فوراً به بازیکن داده می‌شوند (وگرنه تا راه‌اندازی بعدی
+    #    «کشور شما سقوط کرده» نمایش داده می‌شد — باگ گزارش‌شده توسط کاربر)
+    try:
+        await ensure_country_provinces(country["id"], user_id, normalize=True)
+    except Exception:
+        pass
     currency = country.get("currency") or country["name"]
     await db.execute(
         "UPDATE states SET currency_name=?, materials=1000, energy=5000, water=5000, gas=5000 "
@@ -427,7 +435,11 @@ async def change_country(call: CallbackQuery):
 async def change_country_confirm(call: CallbackQuery):
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (call.from_user.id,))
     if user["country_id"]:
-        await db.execute("UPDATE countries SET owner_id=NULL WHERE owner_id=?", (user["id"],))
+        await db.execute("UPDATE countries SET owner_id=NULL, collapsed=0, province_count=5 "
+                         "WHERE owner_id=?", (user["id"],))
+        # 🗺 استان‌های کشور رهاشده آزاد می‌شوند تا نفر بعدی «سقوط‌کرده» نبیند
+        await db.execute("UPDATE provinces SET owner_id=NULL, captured_at=NULL "
+                         "WHERE owner_id=? OR country_id=?", (user["id"], user["country_id"]))
         await db.execute("UPDATE users SET country_id=NULL, country_taken_at=NULL WHERE id=?", (user["id"],))
         await reset_country_data(user["id"])
     await call.answer()

@@ -61,7 +61,7 @@ async def build_users_menu_payload() -> tuple[str, any]:
     markup = kb([
         [("🔍 جستجوی کاربر", "a|usr|search"), ("📋 فهرست بازیکنان", "a|usr|list|0")],
         [("🪙 ریست پول و سکه شاهی همه کاربران", "a|reset_wealth_prompt")],
-        [("♻️ ریست همه بازیکنان (کشورها و پیشرفت)", "a|reset_players_prompt")],
+        [("🧨 ریست کل بازی (پاک‌سازی ۱۰۰٪ پیشرفت همه)", "a|reset_players_prompt")],
         [("◀️ بازگشت به پنل اصلی", "a|root")],
     ])
     return text, markup
@@ -292,13 +292,12 @@ async def user_remove_country(call: CallbackQuery, perms: set):
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (uid,))
     if not user or not user["country_id"]:
         return await call.answer("کشوری ندارد", show_alert=True)
-    await db.execute("UPDATE countries SET owner_id=NULL WHERE owner_id=?", (uid,))
+    from core.fullreset import reset_player_progress
+    await db.execute("UPDATE countries SET owner_id=NULL, collapsed=0, province_count=5 "
+                     "WHERE owner_id=?", (uid,))
     await db.execute("UPDATE users SET country_id=NULL, country_taken_at=NULL WHERE id=?", (uid,))
-    await db.execute("DELETE FROM player_assets WHERE user_id=?", (uid,))
-    await db.execute("DELETE FROM player_projects WHERE user_id=?", (uid,))
-    await db.execute("DELETE FROM soldier_trainings WHERE user_id=?", (uid,))
-    await db.execute("DELETE FROM companies WHERE owner_id=?", (uid,))
-    await db.execute("DELETE FROM bases WHERE guest_id=? OR host_id=?", (uid, uid))
+    # 🧹 پاک‌سازی کامل پیشرفت (تجهیزات، هسته‌ای، ارتقا، استان‌ها، پیمان…)
+    await reset_player_progress(uid)
     await log_action(call.from_user.id, "کاربر", f"برداشتن کشور {user['country_id']} از {uid}")
     await notify_user(uid, "🏳 کشور شما توسط ادمین برداشته شد.")
     await call.answer("✅ کشور آزاد شد")
@@ -338,17 +337,14 @@ async def user_reset(call: CallbackQuery, perms: set):
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (uid,))
     if not user:
         return await call.answer("کاربر یافت نشد", show_alert=True)
+    from core.fullreset import reset_player_progress
     if user["country_id"]:
-        await db.execute("UPDATE countries SET owner_id=NULL WHERE owner_id=?", (uid,))
-    await db.execute(
-        "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, money=?, banned=0 "
-        "WHERE id=?", (await get_initial_money(), uid))
-    await db.execute("DELETE FROM player_assets WHERE user_id=?", (uid,))
-    await db.execute("DELETE FROM player_projects WHERE user_id=?", (uid,))
-    await db.execute("DELETE FROM soldier_trainings WHERE user_id=?", (uid,))
-    await db.execute("DELETE FROM companies WHERE owner_id=?", (uid,))
-    await db.execute("DELETE FROM bases WHERE guest_id=? OR host_id=?", (uid, uid))
-    await db.execute("DELETE FROM states WHERE user_id=?", (uid,))
+        await db.execute("UPDATE countries SET owner_id=NULL, collapsed=0, province_count=5 "
+                         "WHERE owner_id=?", (uid,))
+    # 🧹 همهٔ پیشرفت‌ها (تجهیزات، ☢️ هسته‌ای، 🛢 ارتقا، 🌐 اینترنت، 🗺 استان‌ها…) پاک می‌شود
+    await reset_player_progress(uid, reset_wealth=True)
+    await db.execute("UPDATE users SET country_id=NULL, country_taken_at=NULL, banned=0 WHERE id=?",
+                     (uid,))
     await log_action(call.from_user.id, "کاربر", f"ریست کامل {uid}")
     await notify_user(uid, "♻️ اکانت شما توسط ادمین کامل ریست شد.")
     await call.answer("♻️ ریست شد")
@@ -552,23 +548,44 @@ async def build_reset_players_payload() -> tuple[str, any]:
     assets_c = (await db.fetchone("SELECT COUNT(*) c FROM player_assets"))["c"]
     projects_c = (await db.fetchone("SELECT COUNT(*) c FROM player_projects"))["c"]
     companies_c = (await db.fetchone("SELECT COUNT(*) c FROM companies"))["c"]
+    # شمارش مواردی که قبلاً جا می‌ماندند (باگ گزارش‌شده)
+    async def _cnt(sql: str, col: str = "c") -> int:
+        try:
+            row = await db.fetchone(sql)
+            return int((row or {}).get(col) or 0)
+        except Exception:
+            return 0
+    nukes_c = await _cnt("SELECT COUNT(*) c FROM nuclear_sites WHERE active=1")
+    enrich_c = await _cnt("SELECT COUNT(*) c FROM enrichment WHERE stage>0")
+    oil_c = await _cnt("SELECT COALESCE(SUM(level),0) c FROM oil_business")
+    net_c = await _cnt("SELECT COALESCE(SUM(level),0) c FROM internet_infra")
+    prov_c = await _cnt("SELECT COUNT(*) c FROM provinces WHERE owner_id IS NOT NULL")
+    wars_c = await _cnt("SELECT COUNT(*) c FROM wars WHERE status='active'")
+    coins_c = await _cnt("SELECT COALESCE(SUM(royal_coins),0) c FROM users")
 
     text = (
-        "♻️ <b>ریست همگانی تمام بازیکنان بازی</b>\n\n"
-        "⚠️ <b>هشدار بسیار مهم:</b>\n"
-        "این عملیات بازی را برای تمام بازیکنان از نو آغاز می‌کند (شروع دوره یا سیزن جدید):\n\n"
-        f"• مالکیت تمام <b>{fmt(c_taken)}</b> کشور اشغال‌شده لغو و همه کشورها آزاد خواهند شد.\n"
-        f"• تمام <b>{fmt(assets_c)}</b> دارایی نظامی، سربازان و تجهیزات کاربران حذف می‌شوند.\n"
-        f"• تمام <b>{fmt(projects_c)}</b> پروژه و آموزش نظامی پاکسازی خواهند شد.\n"
-        f"• تمام <b>{fmt(companies_c)}</b> شرکت خصوصی، پایگاه و پیمان پاک می‌شوند.\n"
-        "• پول پایه تمام کاربران به ۵۰٬۰۰۰٬۰۰۰ و سکه شاهی به ۰ بازنشانی می‌شود.\n"
-        "• وضعیت‌های سیاسی، خزانه‌ها، رضایت، دین و قوانین ریست می‌شوند.\n"
-        "• حکم محرومیت (بن) تمام کاربران لغو می‌گردد.\n"
-        "• حساب‌های تلگرام بازیکنان (<b>" + fmt(u_total) + "</b> نفر) باقی می‌ماند تا بلافاصله بتوانند کشور انتخاب کنند.\n\n"
-        "آیا از ریست کامل تمام بازیکنان اطمینان کامل دارید؟"
+        "🧨 <b>ریست کل بازی — پاک‌سازی ۱۰۰٪ پیشرفت بازیکنان</b>\n\n"
+        "⚠️ <b>هشدار بسیار مهم:</b> این عملیات بازی را برای همه از صفر آغاز می‌کند.\n"
+        "همهٔ بازیکنان <b>هر کشوری</b> که دارند از دست می‌دهند و می‌توانند دوباره کشور بگیرند.\n\n"
+        f"• 🏳 کشورهای واگذارشده: <b>{fmt(c_taken)}</b> از {fmt(u_total)} بازیکن — همه آزاد می‌شوند\n"
+        f"• 🎖 تجهیزات و سربازان: <b>{fmt(assets_c)}</b> ردیف دارایی — حذف می‌شود\n"
+        f"• 🏗 پروژه‌ها و آموزش نظامی: <b>{fmt(projects_c)}</b> — حذف می‌شود\n"
+        f"• 🏢 شرکت‌ها و پایگاه‌ها: <b>{fmt(companies_c)}</b> — حذف می‌شود\n"
+        f"• ☢️ تأسیسات هسته‌ای فعال: <b>{fmt(nukes_c)}</b> | "
+        f"🧬 غنی‌سازی در جریان: <b>{fmt(enrich_c)}</b> — پاک می‌شود\n"
+        f"• 🛢 مجموع سطح دکل نفتی: <b>{fmt(oil_c)}</b> | "
+        f"🌐 مجموع سطح اینترنت: <b>{fmt(net_c)}</b> — صفر می‌شود\n"
+        f"• 🗺 استان‌های در اختیار بازیکنان: <b>{fmt(prov_c)}</b> | "
+        f"⚔️ جنگ‌های فعال: <b>{fmt(wars_c)}</b> — پاک می‌شود\n"
+        f"• 🪙 مجموع سکه شاهی: <b>{fmt(coins_c)}</b> | 💰 خزانه‌ها — صفر/بودجهٔ پایه می‌شود\n"
+        "• ⛓ فرسایش جنگ، پیمان‌ها، اتحادها، تنگه‌ها، انقلاب‌ها و رضایت/دین هم ریست می‌شوند.\n\n"
+        "✅ <b>باقی می‌ماند:</b> حساب‌های تلگرام، ادمین‌ها، تنظیمات بازی، فیش‌ها و لاگ‌ها.\n"
+        "🗺 همهٔ کشورها با ۵ استان پایه و بدون مالک برمی‌گردند تا هیچ بازیکنی\n"
+        "پیام «کشور شما سقوط کرده» نبیند.\n\n"
+        "آیا از ریست کل صد‌درصدی اطمینان کامل دارید؟"
     )
     markup = kb([
-        [("⚠️ بله، تمام بازیکنان و کشورها را ریست کن", "a|exec_reset_all_players")],
+        [("⚠️ بله، همه چیز را از صفر کن", "a|exec_reset_all_players")],
         [("❌ خیر، انصراف و بازگشت", "a|usr")],
     ])
     return text, markup
@@ -594,32 +611,37 @@ async def reset_all_players_execute(call: CallbackQuery, perms: set):
     # 1. Free all countries
     await db.execute("UPDATE countries SET owner_id=NULL")
 
-    # 2. Reset users table
+    # 2. Reset users table — توجه: پیش‌فرض «بن‌ها حفظ می‌شوند»
     await db.execute(
-        "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, money=?, banned=0",
+        "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, money=?",
         (await get_initial_money(),),
     )
 
-    # 3. Clean all gameplay dependent tables
-    dependent_tables = [
-        "player_assets",
-        "player_projects",
-        "soldier_trainings",
-        "companies",
-        "bases",
-        "states",
-        "treaties",
-        "strait_blockades",
-        "wars",
-        "war_alliances",
-        "market_orders",
-        "currency_requests",
-    ]
-    for tbl in dependent_tables:
+    # 3. 🧨 پاک‌سازی کامل همهٔ جدول‌های پیشرفت (موتور مشترک core.fullreset)
+    #    پیش‌تر ☢️ هسته‌ای، 🛢 ارتقا، 🌐 اینترنت، 🗺 استان‌ها و ⛓ فرسایش
+    #    جا می‌ماندند و کشور تازهٔ بازیکن «سقوط‌کرده» نمایش داده می‌شد.
+    from core.fullreset import CLEAR_TABLES
+    cleared, failed = 0, []
+    for tbl in CLEAR_TABLES:
         try:
             await db.execute(f"DELETE FROM {tbl}")
+            cleared += 1
+        except Exception:
+            failed.append(tbl)
+    for sql in (
+        "UPDATE countries SET owner_id=NULL, collapsed=0, province_count=5",
+        "UPDATE straits SET owner_id=NULL, captured_at=NULL",
+    ):
+        try:
+            await db.execute(sql)
         except Exception:
             pass
+    # 🗺 استان‌های پایه برای همهٔ کشورها از نو ساخته می‌شود (بدون مالک)
+    try:
+        from core.provinces import ensure_provinces
+        await ensure_provinces()
+    except Exception:
+        pass
 
     # 4. Sync snapshot to Firebase if enabled
     try:
@@ -637,9 +659,13 @@ async def reset_all_players_execute(call: CallbackQuery, perms: set):
         "🎉 <b>ریست همگانی تمام بازیکنان با موفقیت انجام شد!</b>\n\n"
         f"• وضعیت تمام <b>{fmt(u_total)}</b> بازیکن صفر و آماده شروع نو شد.\n"
         f"• تمام <b>{fmt(c_taken)}</b> کشور قبلاً اشغال‌شده آزاد شدند.\n"
-        "• تمام تجهیزات، ساختمان‌ها، ارتش، شرکت‌ها و جنگ‌ها پاکسازی شدند.\n"
-        "• پول همه کاربران ۵۰٬۰۰۰٬۰۰۰ و سکه شاهی ۰ شد.\n"
+        f"• <b>{fmt(cleared)}</b> جدول داده‌های بازی پاک‌سازی شد "
+        "(تجهیزات، سرباز، شرکت، جنگ، پیمان، ☢️ هسته‌ای، 🛢 ارتقا، 🌐 اینترنت، "
+        "🗺 استان‌ها و ⛓ فرسایش).\n"
+        "• همهٔ کشورها ۵ استان پایهٔ آزاد گرفتند — هیچ کشوری «سقوط‌کرده» نیست.\n"
+        f"• پول همه کاربران {fmt_money(await get_initial_money())} و سکه شاهی ۰ شد.\n"
         "• بازی اکنون در وضعیت کاملاً آماده برای شروع سیزن جدید قرار دارد."
+        + (f"\n\n⚠️ جدول‌های پاک‌نشده: {', '.join(failed)}" if failed else "")
     )
     markup = kb([
         [("👥 منوی کاربران", "a|usr")],

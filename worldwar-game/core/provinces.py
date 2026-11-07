@@ -107,17 +107,83 @@ async def owned_provinces(user_id: int) -> list[dict]:
 
 
 async def province_summary(user_id: int) -> dict:
-    """خلاصهٔ استان‌های بازیکن برای نمایش."""
+    """خلاصهٔ استان‌های بازیکن برای نمایش.
+
+    🐞 نکتهٔ مهم (باگ گزارش‌شده): اگر برای کشوری استان ساخته نشده باشد
+    (مثلاً دیتابیس قدیمی یا کشوری که تازه به بازیکن داده شده)، بازیکن
+    «سقوط‌کرده» نشان داده می‌شد در حالی که کشورش سالم بود. این‌جا ابتدا
+    استان‌های پایه ساخته و مالکیت هم‌تراز می‌شود، سپس سقوط تشخیص داده می‌شود.
+    """
     rows = await owned_provinces(user_id)
-    by_country: dict[int, int] = {}
-    for r in rows:
-        by_country[r["country_id"]] = by_country.get(r["country_id"], 0) + 1
     country = await db.fetchone(
         "SELECT c.id, c.name, c.flag FROM countries c JOIN users u ON u.country_id=c.id "
         "WHERE u.id=?", (user_id,))
+
+    # 🛠 خودترمیمی: اگر بازیکن کشور دارد ولی هیچ استانی از کشور خودش در اختیار
+    #    ندارد، استان‌های «بدون مالک» آن کشور به او داده می‌شوند. توجه: استانِ
+    #    تصاحب‌شده مالک دارد (مهاجم)، پس سقوط واقعی هرگز با این کار باطل نمی‌شود.
+    has_home_rows = country and any(r["country_id"] == country["id"] for r in rows)
+    if country and not has_home_rows:
+        try:
+            await ensure_country_provinces(country["id"], user_id)
+            rows = await owned_provinces(user_id)
+        except Exception:
+            pass
+
+    by_country: dict[int, int] = {}
+    for r in rows:
+        by_country[r["country_id"]] = by_country.get(r["country_id"], 0) + 1
     home = by_country.get(country["id"], 0) if country else 0
     return {"total": len(rows), "home": home, "by_country": by_country,
             "country": country, "collapsed": home == 0 and len(rows) == 0}
+
+
+async def ensure_country_provinces(country_id: int, owner_id: int | None = None,
+                                   normalize: bool = False) -> int:
+    """ساخت استان‌های پایهٔ یک کشور (idempotent) و دادنشان به مالک آن.
+
+    اگر کشوری کمتر از `BASE_PROVINCES` استان داشته باشد، استان‌های کم ساخته
+    می‌شوند. استان‌های بدون مالکِ این کشور به مالک داده می‌شوند.
+
+    `normalize=True` هنگام واگذاری کشور به بازیکن تازه استفاده می‌شود: همهٔ
+    استان‌های آن کشور به مالک جدید داده می‌شوند تا فرماندهٔ تازه با «کشور سقوط
+    کرده» روبه‌رو نشود (باگ گزارش‌شده).
+
+    خروجی: تعداد استان‌های ایجادشده.
+    """
+    created = 0
+    row = await db.fetchone(
+        "SELECT COUNT(*) c FROM provinces WHERE country_id=?", (country_id,))
+    have = int((row or {}).get("c") or 0)
+    if have < BASE_PROVINCES:
+        for idx in range(have, BASE_PROVINCES):
+            name = NAME_TEMPLATES[idx % len(NAME_TEMPLATES)]
+            await db.execute(
+                "INSERT OR IGNORE INTO provinces(country_id, idx, name, owner_id) "
+                "VALUES(?,?,?,?)",
+                (country_id, idx, name, owner_id))
+            created += 1
+
+    owner = owner_id
+    if owner is None:
+        c = await db.fetchone("SELECT owner_id FROM countries WHERE id=?", (country_id,))
+        owner = (c or {}).get("owner_id")
+        if not owner:
+            u = await db.fetchone(
+                "SELECT id FROM users WHERE country_id=? AND banned=0", (country_id,))
+            owner = (u or {}).get("id")
+    if owner:
+        if normalize:
+            # 🏳 کشور تازه واگذار شد: همهٔ استان‌هایش به فرماندهٔ جدید می‌رسد
+            await db.execute(
+                "UPDATE provinces SET owner_id=?, captured_at=NULL WHERE country_id=?",
+                (owner, country_id))
+        else:
+            await db.execute(
+                "UPDATE provinces SET owner_id=? WHERE country_id=? AND owner_id IS NULL",
+                (owner, country_id))
+    await sync_counts()
+    return created
 
 
 async def defender_can_hold(defender_id: int, attacker_power: float,
@@ -130,6 +196,13 @@ async def defender_can_hold(defender_id: int, attacker_power: float,
     """
     lo = float(await get_setting("province_defense_min_chance", "10")) / 100
     hi = float(await get_setting("province_defense_max_chance", "70")) / 100
+    # ⛓ کشور فرسوده استان را سخت‌تر نگه می‌دارد
+    try:
+        from core import attrition as _attr
+        mult = await _attr.province_defense_multiplier(defender_id)
+        lo, hi = lo * mult, hi * mult
+    except Exception:
+        pass
     if defender_power <= 0 or attacker_power <= 0:
         return False
     ratio = defender_power / attacker_power
@@ -280,6 +353,13 @@ async def battle_province_effect(bot, attacker_id: int, defender_id: int,
     line = (f"\n🗺 <b>استان تصاحب شد:</b> {captured['name']} از {d_name} "
             f"به {a_name} منتقل شد.\n"
             f"🏴 استان‌های شما: <b>{summary['home']}</b> (مجموع {summary['total']})")
+
+    # ⛓ فرسایش با سقوط کامل کشور پاک می‌شود (کشور از نو آغاز می‌کند)
+    try:
+        from core import attrition as _attr
+        await _attr.reset(defender_id)
+    except Exception:
+        pass
 
     collapsed = await check_collapse(defender_id)
     if collapsed:

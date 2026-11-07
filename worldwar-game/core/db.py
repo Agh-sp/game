@@ -378,6 +378,49 @@ CREATE TABLE IF NOT EXISTS nuclear_strikes (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS country_attrition (
+  user_id INTEGER PRIMARY KEY,
+  wear REAL DEFAULT 0,
+  strikes INTEGER DEFAULT 0,
+  last_at TEXT,
+  last_attacker INTEGER,
+  recovering INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS ceasefire_offers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  war_id INTEGER,
+  from_id INTEGER,
+  to_id INTEGER,
+  status TEXT DEFAULT 'pending',
+  ends_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS arms_deals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  seller_id INTEGER,
+  buyer_id INTEGER,
+  item_type TEXT,
+  item_id INTEGER,
+  quantity INTEGER DEFAULT 0,
+  unit_price INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'pending',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS sabotage_ops (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attacker_id INTEGER,
+  defender_id INTEGER,
+  kind TEXT DEFAULT '',
+  item_id INTEGER DEFAULT 0,
+  success INTEGER DEFAULT 0,
+  note TEXT DEFAULT '',
+  last_at TEXT DEFAULT (datetime('now')),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS internet_infra (
   user_id INTEGER PRIMARY KEY,
   level INTEGER DEFAULT 0,
@@ -676,7 +719,8 @@ ALL_TABLES = [
     "negotiation_msgs", "treaties", "treaty_confirms", "direct_trades", "straits",
     "strait_blockades", "rescue_campaigns", "rescue_donations", "oil_offers",
     "currency_requests", "fb_queue", "nuclear_sites", "nuclear_strikes",
-    "internet_infra",
+    "internet_infra", "country_attrition", "ceasefire_offers", "arms_deals",
+    "sabotage_ops",
 ]
 
 
@@ -1035,6 +1079,31 @@ DEFAULT_SETTINGS = {
     "nuclear_leak_chance": "35",      # شانس نشت رادیواکتیو در تخریب کامل (درصد)
     "nuclear_rebuild_cost": "120000000",  # هزینهٔ پایهٔ بازسازی تأسیسات
     "nuclear_site_hp": "100",         # استحکام پایهٔ تأسیسات
+    # ── 🕊 آتش‌بس و صلح (core/ceasefire.py) ──
+    "ceasefire_offer_hours": "24",          # مهلت پاسخ به پیشنهاد آتش‌بس
+    "ceasefire_cooldown_hours": "6",        # فاصلهٔ مجاز بین دو پیشنهاد آتش‌بس
+    "attrition_surrender_threshold": "60",  # حداقل فرسایش برای مجاز بودن تسلیم
+    "surrender_provinces": "2",             # تعداد استانی که در تسلیم واگذار می‌شود
+    # ── 🛒 بازار تسلیحات (core/arms.py) ──
+    "arms_commission_percent": "5",         # کمیسیون بازار تسلیحات
+    "arms_max_quantity": "5000",            # حداکثر تعداد هر معاملهٔ تسلیحات
+    "arms_listing_hours": "48",             # اعتبار آگهی فروش تسلیحات
+    # ── ☢️ غنی‌سازی اورانیوم (core/enrichment.py) ──
+    "enrichment_stage_minutes": "5",        # مدت هر مرحلهٔ غنی‌سازی به دقیقه
+    # ── 🎯 خرابکاری در تأسیسات (core/sabotage.py) ──
+    "sabotage_cooldown_minutes": "20",      # کول‌داون بین دو خرابکاری (دقیقه)
+    "sabotage_satisfaction_hit": "3",       # افت رضایت مدافع در هر خرابکاری موفق
+    "sabotage_wear_add": "8",               # فرسایش اضافه‌شده به مدافع
+    # ── ⚔️ جنگ فرسایشی و نابودی واقعی (core/attrition.py) ──
+    "attrition_per_strike": "12",          # فرسایش اضافه‌شده به ازای هر حملهٔ موفق (٪)
+    "attrition_failed_strike_share": "0.35",  # سهم فرسایش در حملهٔ ناموفق
+    "attrition_max_wear": "90",            # سقف فرسایش (٪)
+    "attrition_decay_per_hour": "6",       # بازیابی خودکار در هر ساعت (٪)
+    "attrition_defense_penalty": "0.6",    # ضریب کاهش توان دفاعی بر اثر فرسایش
+    "attrition_income_penalty": "1.0",     # ضریب کاهش درآمد بر اثر فرسایش
+    "attrition_morale_base": "3",          # ریزش پایهٔ رضایت در هر حملهٔ موفق
+    "attrition_morale_per_wear": "0.12",   # ریزش اضافه به ازای هر درصد فرسایش
+    "attrition_collapse_threshold": "85",  # آستانهٔ سقوط بر اثر فرسایش (٪)
     # ── 🌐 رفاه اینترنت (core/internet.py) ──
     "internet_max_level": "5",              # حداکثر سطح زیرساخت اینترنت
     "internet_upgrade_cost": "80000000",    # هزینهٔ پایهٔ ارتقای یک سطح (پول)

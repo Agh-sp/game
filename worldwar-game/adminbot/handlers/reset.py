@@ -44,6 +44,19 @@ async def reset_payload(uid: int) -> tuple[str, object]:
         "SELECT COUNT(*) c FROM player_assets WHERE user_id=?", (uid,))
     projects = await db.fetchone(
         "SELECT COUNT(*) c FROM player_projects WHERE user_id=?", (uid,))
+
+    async def _cnt(sql: str) -> int:
+        try:
+            row = await db.fetchone(sql, (uid,))
+            return int((row or {}).get("c") or 0)
+        except Exception:
+            return 0
+    enrich_stage = await _cnt("SELECT COALESCE(MAX(stage),0) c FROM enrichment WHERE user_id=?")
+    nuke = await _cnt("SELECT COUNT(*) c FROM nuclear_sites WHERE user_id=? AND active=1")
+    oil_lv = await _cnt("SELECT COALESCE(MAX(level),0) c FROM oil_business WHERE user_id=?")
+    net_lv = await _cnt("SELECT COALESCE(MAX(level),0) c FROM internet_infra WHERE user_id=?")
+    wear = await _cnt("SELECT CAST(COALESCE(AVG(wear),0) AS INT) c FROM country_attrition WHERE user_id=?")
+
     text = (
         "♻️ <b>ریست کامل کشور</b>\n\n"
         f"👤 بازیکن: <b>{u['full_name'] or uid}</b> (<code>{uid}</code>)\n"
@@ -51,10 +64,14 @@ async def reset_payload(uid: int) -> tuple[str, object]:
         f"💰 خزانه: {fmt_money(u['money'] or 0)} | 🪙 سکه: {fmt(u['royal_coins'] or 0)}\n"
         f"🗺 استان‌ها: {fmt((provinces or {}).get('c') or 0)}\n"
         f"🎖 تجهیزات: {fmt((assets or {}).get('c') or 0)} | "
-        f"🏗 پروژه‌ها: {fmt((projects or {}).get('c') or 0)}\n\n"
+        f"🏗 پروژه‌ها: {fmt((projects or {}).get('c') or 0)}\n"
+        f"☢️ مرحلهٔ غنی‌سازی: {fmt(enrich_stage)} | "
+        f"تأسیسات فعال: {fmt(nuke)} | ⛓ فرسایش: {fmt(wear)}٪\n"
+        f"🛢 سطح تجهیزات استخراج: {fmt(oil_lv)} | 🌐 سطح اینترنت: {fmt(net_lv)}\n\n"
         "⚠️ <b>با تأیید، این موارد انجام می‌شود:</b>\n"
-        "• کشور فعلی کاملاً آزاد و به حالت اولیه برمی‌گردد\n"
+        "• کشور فعلی کاملاً آزاد و به حالت اولیه برمی‌گردد (۵ استان پایه، بدون مالک)\n"
         "• بازیکن همهٔ استان‌ها، تجهیزات، پروژه‌ها و شرکت‌ها را از دست می‌دهد\n"
+        "• ☢️ تأسیسات هسته‌ای، 🧬 غنی‌سازی، 🛢 ارتقای نفت، 🌐 اینترنت و ⛓ فرسایش پاک می‌شود\n"
         "• سکه شاهی صفر و خزانه به بودجهٔ اولیه برمی‌گردد\n"
         "• بازیکن با <b>/start</b> می‌تواند کشور دیگری انتخاب کند\n\n"
         "آیا مطمئن هستید؟"
@@ -168,11 +185,10 @@ async def reset_country_assign(call: CallbackQuery, perms: set):
     await db.execute("UPDATE countries SET owner_id=?, collapsed=0 WHERE id=?", (uid, cid))
     await db.execute("UPDATE users SET country_id=?, country_taken_at=datetime('now') WHERE id=?",
                      (cid, uid))
-    # استان‌های پایهٔ کشور به بازیکن برسد
+    # 🗺 استان‌های پایهٔ کشور به بازیکن برسد (همهٔ استان‌ها به مالک جدید)
     try:
-        from core.provinces import ensure_provinces, sync_owners
-        await ensure_provinces()
-        await sync_owners()
+        from core.provinces import ensure_country_provinces
+        await ensure_country_provinces(cid, uid, normalize=True)
     except Exception:
         pass
     try:
@@ -217,7 +233,7 @@ async def reset_country_execute(call: CallbackQuery, perms: set):
     # ۱) آزادسازی کشور و بازگرداندنش به حالت اولیه
     if cid:
         await db.execute(
-            "UPDATE countries SET owner_id=NULL, collapsed=0, province_count=0 WHERE id=?",
+            "UPDATE countries SET owner_id=NULL, collapsed=0, province_count=5 WHERE id=?",
             (cid,))
         # استان‌های کشور: مالکیت پاک، ساختار حفظ (۵ استان پایه)
         await db.execute(
@@ -236,30 +252,39 @@ async def reset_country_execute(call: CallbackQuery, perms: set):
         "DELETE FROM oil_business WHERE user_id=?",
         "DELETE FROM enrichment WHERE user_id=?",
         "DELETE FROM alliance_members WHERE user_id=?",
+        "DELETE FROM country_attrition WHERE user_id=?",
+        "DELETE FROM nuclear_sites WHERE user_id=?",
+        "DELETE FROM internet_infra WHERE user_id=?",
     ):
         try:
             await db.execute(sql, (uid, uid) if sql.count("?") == 2 else (uid,))
         except Exception:
             pass
+    # ۳) پاک‌سازی کامل دارایی‌های وابسته با موتور مشترک core.fullreset
+    #    (تجهیزات، سرباز، پروژه، شرکت، پایگاه، ☢️ هسته‌ای، 🛢 ارتقا، 🌐 اینترنت،
+    #     ⛓ فرسایش، 🗺 استان‌های تصاحب‌شده، پیمان‌ها، اتحاد، جنگ‌ها…)
+    from core.fullreset import reset_player_progress
+    await reset_player_progress(uid)
 
     # ۴) ریست بازیکن
     await db.execute(
         "UPDATE users SET country_id=NULL, country_taken_at=NULL, royal_coins=0, "
         "money=? WHERE id=?",
         (await get_initial_money(), uid))
-    # وضعیت داخلی کشور به حالت پایه برمی‌گردد
-    for sql in (
-        "UPDATE states SET satisfaction=50, tax_rate=0, subsidy_daily=0, "
-        "materials=1000 WHERE user_id=?",
-        "UPDATE states SET materials=1000 WHERE user_id=?",
-    ):
+    # وضعیت داخلی کشور به حالت پایه برمی‌گردد (states در ریست بالا پاک شده،
+    # پس ردیف تازه با مقادیر پیش‌فرض ساخته می‌شود)
+    try:
+        from core.economy import get_state
+        await get_state(uid)
+    except Exception:
+        pass
+    # 🗺 استان‌های کشور آزاد می‌شوند تا مالک بعدی «سقوط‌کرده» نبیند
+    if cid:
         try:
-            await db.execute(sql, (uid,))
-            break
+            await db.execute(
+                "UPDATE countries SET collapsed=0, province_count=5 WHERE id=?", (cid,))
         except Exception:
-            continue
-
-    await log_action(call.from_user.id, "کاربر", f"ریست کشور {uid} ({cname})")
+            pass
 
     # ۵) اطلاع به بازیکن
     try:
@@ -275,9 +300,14 @@ async def reset_country_execute(call: CallbackQuery, perms: set):
         pass
 
     await call.answer("✅ کشور ریست شد", show_alert=True)
+    await log_action(call.from_user.id, "کاربر",
+                     f"ریست کامل کشور و پیشرفت بازیکن {uid} (کشور قبلی: {cname})")
     text, markup = await reset_payload(uid)
     await call.message.edit_text(
-        f"✅ <b>ریست انجام شد</b>\n\n"
-        f"👤 بازیکن <code>{uid}</code> از کشور <b>{cname}</b> آزاد شد "
-        "و می‌تواند کشور تازه انتخاب کند.\n\n" + text,
+        f"✅ <b>ریست کامل انجام شد</b>\n\n"
+        f"👤 بازیکن <code>{uid}</code> از کشور <b>{cname}</b> آزاد شد.\n"
+        "🧹 همهٔ پیشرفت‌ها پاک شد: 🎖 تجهیزات • 🏗 پروژه‌ها • 🏢 شرکت‌ها • "
+        "☢️ هسته‌ای • 🛢 ارتقای نفت • 🌐 اینترنت • 🗺 استان‌ها • ⛓ فرسایش • 📜 پیمان‌ها\n"
+        "🏳 کشور قبلی با ۵ استان پایه آزاد شد و «سقوط‌کرده» علامت نمی‌خورد.\n\n"
+        "اکنون می‌تواند با /start کشور تازه بگیرد.\n\n" + text,
         reply_markup=markup)

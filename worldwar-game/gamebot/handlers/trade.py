@@ -111,15 +111,22 @@ async def _countries_kb(user_id: int, cb_prefix: str) -> list:
     """دریافت لیست کشورهای دارای بازیکن و همچنین هیئت‌های دیپلماتیک سایر ملل جهان."""
     # ۱. بازیکنان واقعی دارای کشور
     players = await db.fetchall(
-        "SELECT u.id AS player_id, u.username, c.name, c.flag, c.id AS cid "
+        "SELECT u.id AS player_id, c.name, c.flag, c.id AS cid "
         "FROM users u JOIN countries c ON c.id=u.country_id "
         "WHERE u.id!=? AND u.banned=0 AND u.country_id IS NOT NULL "
         "ORDER BY c.name", (user_id,))
     rows = []
     used_cids = set()
     for r in players:
-        uname = f" (@{r['username']})" if r['username'] else ""
-        rows.append([(f"👤 {r['flag']} {r['name']}{uname}", f"{cb_prefix}{r['player_id']}")])
+        # 🔒 حریم خصوصی: هیچ یوزرنیم/آیدی تلگرامی نمایش داده نمی‌شود —
+        # به‌جای آن «نام فرمانده» محرمانه و ثابت نشان داده می‌شود.
+        try:
+            from core.privacy import commander_name
+            nick = await commander_name(r["player_id"])
+        except Exception:
+            nick = ""
+        cmd = f" — فرمانده: {nick}" if nick else ""
+        rows.append([(f"👤 {r['flag']} {r['name']}{cmd}", f"{cb_prefix}{r['player_id']}")])
         used_cids.add(r["cid"])
 
     # ۲. هیئت‌های دیپلماتیک سایر کشورهای جهان (NPC) جهت تعامل دائمی
