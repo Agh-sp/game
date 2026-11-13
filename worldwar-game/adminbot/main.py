@@ -54,13 +54,13 @@ def create_dispatcher() -> Dispatcher:
     dp.errors.register(_global_error_handler)
     dp.update.outer_middleware(AdminGate())
     dp.startup.register(_on_startup)
-    from adminbot.handlers import (admins, broadcast, logs, panel, receipts,
+    from adminbot.handlers import (admins, broadcast, logs, panel, receipts, security,
                                    settings, tickets, users, media, seasons,
                                    sections, prices, equipment_bulk, currency, channel,
                                    reset)
     from adminbot import crud
-    for r in (panel, channel, users, receipts, tickets, broadcast, admins, settings, logs,
-              media, seasons, sections, prices, equipment_bulk, currency, reset, crud):
+    for r in (panel, channel, users, receipts, tickets, broadcast, security, admins, settings,
+              logs, media, seasons, sections, prices, equipment_bulk, currency, reset, crud):
         dp.include_router(r.router)
     return dp
 

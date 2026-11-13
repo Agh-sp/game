@@ -212,6 +212,44 @@ async def main():
     H.check(bool(ui_texts) and "استراتژی" in ui_texts[0],
             "گزارش کانال از مسیر ربات هم استراتژی دارد")
 
+    # ─── تست ۷: باگ «۵ کشتی ۱۰۰ ناو را نابود کرد» ───
+    print("\n== TEST 7: تلفات متناسب با نیروی اعزامی (۵ کشتی ≠ نابودی ۱۰۰ ناو) ==")
+    await db.execute("DELETE FROM player_assets WHERE user_id IN (101,102)")
+    carrier = await equip_id("ناو هواپیمابر")
+    if not carrier:
+        carrier = await equip_id("ناو")
+    ship = await equip_id("قایق تندرو") or frigate
+    await add_asset(102, "equipment", carrier["id"], 100)     # انبار بزرگ مدافع
+    await add_asset(102, "equipment", missile["id"], 30)
+    await add_asset(101, "equipment", ship["id"], 5)          # تنها ۵ یگان مهاجم
+    await add_asset(101, "equipment", carrier["id"], 40)      # ذخیره‌گاه بزرگ مهاجم
+    def_ships_before = await qty(102, "equipment", carrier["id"])
+    atk_reserve_before = await qty(101, "equipment", carrier["id"])
+
+    war_id2 = await db.execute(
+        "INSERT INTO wars(attacker_id, defender_id, reason, permission, status) VALUES(?,?,?,?,?)",
+        (101, 102, "تست تلفات", 0, "active"))
+    war2 = await db.fetchone("SELECT * FROM wars WHERE id=?", (war_id2,))
+    H.SENT.clear()
+    orig_random = random.random
+    random.random = lambda: 0.01      # نبرد همیشه برده می‌شود (بدترین حالت برای مدافع)
+    try:
+        await resolve_battle(FakeCall(bot, 101), war2, {str(ship["id"]): 5}, "naval")
+    finally:
+        random.random = orig_random
+
+    def_ships_after = await qty(102, "equipment", carrier["id"])
+    atk_reserve_after = await qty(101, "equipment", carrier["id"])
+    cap = await combat.defend_cap(101, 5)
+    killed = def_ships_before - def_ships_after
+    H.check(killed <= cap, f"تلفات مدافع در سقف نیروی اعزامی ماند ({killed} ≤ {cap})")
+    H.check(killed < 20, f"۵ یگان مهاجر نتوانست ۱۰۰ ناو را نابود کند (نابودشده: {killed})")
+    H.check(def_ships_after >= 80, f"ناوگان مدافع تقریباً سالم ماند ({def_ships_after} از ۱۰۰)")
+    kept = atk_reserve_before - atk_reserve_after
+    H.check(kept <= 4, f"ذخیره‌گاه مهاجم دست‌نخورده ماند (از دست رفته: {kept} از {atk_reserve_before})")
+    rep = "\n".join(channel_texts())
+    H.check("یگانِ درگیر" in rep, "گزارش نبرد توضیح می‌دهد تلفات از یگان‌های درگیر است")
+
     print("\n=== TOTAL ERRORS:", len(H.ERRORS))
     for e in H.ERRORS:
         print("   -", e)

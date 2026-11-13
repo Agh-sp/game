@@ -37,6 +37,8 @@ from core.config import (ADMIN_BOT_TOKEN, GAME_BOT_TOKEN, KEEPALIVE_MINUTES,
                          PUBLIC_BASE_URL, WEBHOOK_HOST, WEBHOOK_PORT,
                          WEBHOOK_SECRET, check_tokens)
 from core.db import db, init_db
+from core.security import (RateLimiter, ReplayGuard, ensure_webhook_secret,
+                           secret_matches)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -44,10 +46,20 @@ log = logging.getLogger("webhook")
 
 STARTED_AT = time.time()
 STATS = {
-    "game": {"updates": 0, "last_update": None, "errors": 0},
-    "admin": {"updates": 0, "last_update": None, "errors": 0},
+    "game": {"updates": 0, "last_update": None, "errors": 0, "rejected": 0,
+             "duplicates": 0, "throttled": 0},
+    "admin": {"updates": 0, "last_update": None, "errors": 0, "rejected": 0,
+              "duplicates": 0, "throttled": 0},
     "keepalive": {"count": 0, "last_ping": None, "last_ok": None},
 }
+
+# فقط همین انواع آپدیت پذیرفته می‌شوند (بقیه از سمت تلگرام هم ارسال نمی‌شوند)
+ALLOWED_UPDATES = ["message", "callback_query", "inline_query", "channel_post",
+                   "chat_member", "my_chat_member"]
+
+# مسیرهای مدیریتی که کلید وبهوک لازم دارند (اگر باز باشند، هر کسی می‌تواند
+# وبهوک را به سرور خودش تغییر دهد یا حذف کند)
+PROTECTED_POSTS = ("/webhook/set", "/webhook/delete")
 
 
 # ─────────────────────────── ساخت برنامه ───────────────────────────
@@ -60,8 +72,23 @@ def create_app(game_dp: Dispatcher | None = None, game_bot: Bot | None = None,
     app = web.Application(client_max_size=8 * 1024 * 1024)
     app["bots"] = {"game": game_bot, "admin": admin_bot}
     app["dps"] = {"game": game_dp, "admin": admin_dp}
-    app["secret"] = secret if secret is not None else WEBHOOK_SECRET
+    app["secret"] = (secret if secret is not None else WEBHOOK_SECRET) or ""
     app["base_url"] = (base_url or PUBLIC_BASE_URL).rstrip("/")
+    app["replay"] = ReplayGuard()
+    app["limiter"] = RateLimiter(per_minute=240)
+
+    @web.middleware
+    async def guard_middleware(request: web.Request, handler):
+        """🔐 نگهبان: مسیرهای مدیریتی وبهوک فقط با کلید معتبر."""
+        if request.method == "POST" and request.path in PROTECTED_POSTS:
+            got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if not secret_matches(app["secret"], got):
+                log.warning("⛔️ تلاش برای تغییر وبهوک بدون کلید معتبر (ip=%s)",
+                            request.remote or "?")
+                return web.json_response({"ok": False, "error": "forbidden"}, status=403)
+        return await handler(request)
+
+    app.middlewares.append(guard_middleware)
 
     app.router.add_route("GET", "/health", handle_health)
     app.router.add_route("HEAD", "/health", handle_health)
@@ -78,6 +105,17 @@ def create_app(game_dp: Dispatcher | None = None, game_bot: Bot | None = None,
 
 
 async def _on_startup(app: web.Application) -> None:
+    # اگر کلید وبهوک تنظیم نشده باشد، همین‌جا ساخته و ذخیره می‌شود — بدون کلید
+    # هیچ آپدیتی پذیرفته نمی‌شود (جلوگیری از آپدیت جعلی).
+    if not app.get("secret"):
+        try:
+            app["secret"], _fresh = await ensure_webhook_secret()
+        except Exception:
+            log.exception("ساخت کلید وبهوک ناموفق بود")
+        if not app.get("secret"):
+            _auto = __import__("secrets").token_urlsafe(32)
+            app["secret"] = _auto
+            log.warning("🔐 کلید وبهوک موقت ساخته شد — بعد از ری‌استارت باید وبهوک دوباره ثبت شود")
     # اجرای هوک‌های startup هر دیسپچر (زمان‌بند درآمد/رأی‌گیری، ثبت دستورات تلگرام و ...)
     for kind, dp in app["dps"].items():
         bot = app["bots"].get(kind)
@@ -143,7 +181,8 @@ async def handle_health(request: web.Request) -> web.Response:
         "webhook": {
             "base_url": request.app["base_url"] or None,
             "paths": {"game": "/webhook/game", "admin": "/webhook/admin"},
-            "secret_set": bool(request.app["secret"]),
+            "secret_set": bool(request.app.get("secret")),
+            "secret_required": True,
         },
         "keepalive": {"interval_minutes": KEEPALIVE_MINUTES, **STATS["keepalive"]},
         "db": _db_file_info(),
@@ -155,12 +194,19 @@ def make_update_handler(kind: str):
     """سازنده هندلر POST وبهوک برای هر ربات."""
 
     async def handler(request: web.Request) -> web.Response:
-        secret = request.app["secret"]
-        if secret:
-            got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-            if got != secret:
-                log.warning("وبهوک %s با کلید نامعتبر رد شد", kind)
-                return web.json_response({"ok": False, "error": "invalid secret"}, status=403)
+        # ⛔️ بی‌کلید = بدون اجرا. قبلاً اگر WEBHOOK_SECRET خالی بود هیچ بررسی‌ای
+        # انجام نمی‌شد و هر کسی می‌توانست یک آپدیت جعلی از طرف ادمین بفرستد.
+        secret = request.app.get("secret") or ""
+        got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not secret_matches(secret, got):
+            STATS[kind]["rejected"] = STATS[kind].get("rejected", 0) + 1
+            log.warning("⛔️ وبهوک %s با کلید نامعتبر رد شد (ip=%s)",
+                        kind, request.headers.get("X-Forwarded-For", request.remote or "?"))
+            return web.json_response({"ok": False, "error": "invalid secret"}, status=403)
+        limiter: RateLimiter = request.app["limiter"]
+        if not limiter.allow(f"{kind}:{request.remote or '-'}"):
+            STATS[kind]["throttled"] = STATS[kind].get("throttled", 0) + 1
+            return web.json_response({"ok": False, "error": "too many requests"}, status=429)
         dp = request.app["dps"].get(kind)
         bot = request.app["bots"].get(kind)
         if dp is None or bot is None:
@@ -169,6 +215,14 @@ def make_update_handler(kind: str):
             payload = await request.json()
         except Exception:
             return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "invalid update"}, status=400)
+        # 🔁 آپدیت تکراری/بازپخش‌شده پردازش نمی‌شود
+        guard: ReplayGuard = request.app["replay"]
+        rid = f"{kind}:{payload.get('update_id')}"
+        if guard.duplicate(rid):
+            STATS[kind]["duplicates"] = STATS[kind].get("duplicates", 0) + 1
+            return web.json_response({"ok": True, "duplicate": True})
         try:
             update = Update.model_validate(payload, context={"bot": bot})
         except Exception as exc:
@@ -232,8 +286,8 @@ async def handle_webhook_set(request: web.Request) -> web.Response:
                 url,
                 secret_token=request.app["secret"] or None,
                 drop_pending_updates=False,
-                allowed_updates=["message", "callback_query", "inline_query",
-                                 "channel_post", "chat_member", "my_chat_member"],
+                allowed_updates=ALLOWED_UPDATES,
+                max_connections=40,
             )
             results[kind] = {"ok": True, "url": url}
         except Exception as exc:
@@ -307,6 +361,16 @@ def _db_file_info() -> dict:
         return {}
 
 
+def _make_bot(token: str) -> Bot:
+    """ساخت Bot با همان مسیر شبکه‌ای که netdiag تست کرده است (پروکسی/SSL)."""
+    try:
+        from core import netdiag
+        return netdiag.make_bot(token)
+    except Exception:  # noqa: BLE001
+        log.exception("netdiag.make_bot ناموفق بود — Bot ساده ساخته می‌شود")
+        return Bot(token, default=DefaultBotProperties(parse_mode="HTML"))
+
+
 def build_bots() -> tuple[Bot | None, Dispatcher | None, Bot | None, Dispatcher | None]:
     """ساخت بات‌ها و دیسپچرها برای حالت وبهوک."""
     from adminbot.main import create_dispatcher as create_admin_dp
@@ -314,12 +378,12 @@ def build_bots() -> tuple[Bot | None, Dispatcher | None, Bot | None, Dispatcher 
 
     game_bot = game_dp = admin_bot = admin_dp = None
     if GAME_BOT_TOKEN:
-        game_bot = Bot(GAME_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        game_bot = _make_bot(GAME_BOT_TOKEN)
         game_dp = create_game_dp()
     else:
         log.warning("توکن GAME_BOT_TOKEN تنظیم نشده است.")
     if ADMIN_BOT_TOKEN:
-        admin_bot = Bot(ADMIN_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        admin_bot = _make_bot(ADMIN_BOT_TOKEN)
         admin_dp = create_admin_dp()
     else:
         log.warning("توکن ADMIN_BOT_TOKEN تنظیم نشده است.")
@@ -328,6 +392,7 @@ def build_bots() -> tuple[Bot | None, Dispatcher | None, Bot | None, Dispatcher 
 
 async def set_webhook_cli(base_url: str, delete: bool = False) -> None:
     await init_db()
+    secret, _fresh = await ensure_webhook_secret()
     game_bot, _game_dp, admin_bot, _admin_dp = build_bots()
     base = base_url.rstrip("/")
     for kind, bot in (("game", game_bot), ("admin", admin_bot)):
@@ -340,10 +405,10 @@ async def set_webhook_cli(base_url: str, delete: bool = False) -> None:
                 print(f"🗑 وبهوک ربات {kind} حذف شد")
             else:
                 await bot.set_webhook(f"{base}/webhook/{kind}",
-                                      secret_token=WEBHOOK_SECRET or None,
+                                      secret_token=secret or None,
                                       drop_pending_updates=False,
-                                      allowed_updates=["message", "callback_query", "inline_query",
-                                                       "channel_post", "chat_member", "my_chat_member"])
+                                      allowed_updates=ALLOWED_UPDATES,
+                                      max_connections=40)
                 print(f"✅ وبهوک ربات {kind}: {base}/webhook/{kind}")
         except Exception as exc:
             print(f"❌ خطا در ربات {kind}: {exc}")
@@ -359,8 +424,12 @@ async def main_async(host: str, port: int) -> None:
     check_tokens(admin=False)
     await init_db()
     game_bot, game_dp, admin_bot, admin_dp = build_bots()
+    secret, fresh = await ensure_webhook_secret()
+    if fresh:
+        log.warning("🔐 کلید وبهوک تازه ساخته شد — با --set-webhook آدرس عمومی، "
+                    "وبهوک را دوباره ثبت کنید تا تلگرام کلید را بفرستد.")
     app = create_app(game_dp, game_bot, admin_dp, admin_bot,
-                     secret=WEBHOOK_SECRET, base_url=PUBLIC_BASE_URL)
+                     secret=secret, base_url=PUBLIC_BASE_URL)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host, port)

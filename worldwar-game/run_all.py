@@ -34,6 +34,16 @@ log = logging.getLogger("main")
 stop_event = asyncio.Event()
 
 
+def _make_bot(token: str) -> Bot:
+    """ساخت Bot با مسیر شبکهٔ انتخاب‌شده توسط netdiag (پروکسی/SSL)."""
+    try:
+        from core import netdiag
+        return netdiag.make_bot(token)
+    except Exception:  # noqa: BLE001
+        log.exception("netdiag.make_bot ناموفق بود — Bot ساده ساخته می‌شود")
+        return Bot(token, default=DefaultBotProperties(parse_mode="HTML"))
+
+
 async def poll_with_retry(dp: Dispatcher, bot: Bot, name: str) -> None:
     while not stop_event.is_set():
         try:
@@ -67,7 +77,7 @@ async def run_bots_in_process() -> None:
     tasks: list[asyncio.Task] = []
 
     if GAME_BOT_TOKEN:
-        game_bot = Bot(GAME_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        game_bot = _make_bot(GAME_BOT_TOKEN)
         game_dp = create_game_dp()
         bots.append(game_bot)
         dps.append(game_dp)
@@ -76,7 +86,7 @@ async def run_bots_in_process() -> None:
         log.warning("توکن GAME_BOT_TOKEN تنظیم نشده است.")
 
     if ADMIN_BOT_TOKEN:
-        admin_bot = Bot(ADMIN_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        admin_bot = _make_bot(ADMIN_BOT_TOKEN)
         admin_dp = create_admin_dp()
         bots.append(admin_bot)
         dps.append(admin_dp)
@@ -134,7 +144,7 @@ async def run_panel(autostart: bool = True) -> None:
     site = web.TCPSite(runner, cfg.WEB_HOST, cfg.WEB_PORT)
     await site.start()
     log.info("🌐 پنل فرماندهی روی http://%s:%s (پایتون/aiohttp)", cfg.WEB_HOST, cfg.WEB_PORT)
-    log.info("   سلامت سرویس: /health  |  توکن‌ها و آیدی ادمین: /api/secrets")
+    log.info("   سلامت سرویس: /health  |  ورود به پنل: /login  (گذرواژه: ربات ادمین → 🔐 امنیت)")
 
     if autostart:
         await asyncio.get_running_loop().run_in_executor(None, process_manager.autostart)

@@ -54,8 +54,12 @@ def guess_base_url(explicit: str | None) -> str:
     return ""
 
 
+SECRET_HEADER: dict[str, str] = {}
+
+
 def http_get(url: str, timeout: float = 40.0) -> dict:
-    req = urllib.request.Request(url, headers={"User-Agent": "wwgame-paw-start/1.0"})
+    headers = {"User-Agent": "wwgame-paw-start/1.0", **SECRET_HEADER}
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             raw = resp.read().decode("utf-8", errors="replace")
@@ -99,6 +103,16 @@ def main() -> None:
         print("   ✅ دیتابیس آماده است")
     except Exception as exc:  # noqa: BLE001
         print("   ⚠️ آماده‌سازی دیتابیس:", exc)
+
+    # ۱٫۵) کلید وبهوک: اگر تنظیم نشده باشد ساخته و ذخیره می‌شود (الزامی — بدون
+    #      کلید، سرویس هیچ آپدیتی را نمی‌پذیرد)
+    try:
+        from core.security import ensure_webhook_secret
+        secret, fresh = asyncio.run(ensure_webhook_secret())
+        SECRET_HEADER["X-Telegram-Bot-Api-Secret-Token"] = secret
+        print("🔐 کلید وبهوک:", "تازه ساخته شد" if fresh else "موجود است")
+    except Exception as exc:  # noqa: BLE001
+        print("⚠️ آماده‌سازی کلید وبهوک:", exc)
 
     # ۲) ثبت وبهوک از طریق همان سرویس WSGI (تنها راه مطمئن روی PAW)
     print("🔗 ثبت وبهوک هر دو ربات ...")

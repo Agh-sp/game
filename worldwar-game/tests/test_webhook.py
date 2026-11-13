@@ -57,7 +57,7 @@ async def run():
             "update_id": 5,
             "message": {
                 "message_id": 1,
-                "date": 1700000000,
+                "date": int(__import__("time").time()),
                 "chat": {"id": 1001, "type": "private"},
                 "from": {"id": 1001, "is_bot": False, "first_name": "A"},
                 "text": "/start",
@@ -87,15 +87,22 @@ async def run():
         os.environ.pop("WEBAPP_URL", None)
 
         print("\n== TEST 5: webhook set/delete without a public URL ==")
+        # 🔐 تغییر وبهوک فقط با کلید معتبر
         r = await client.post("/webhook/set", headers={"Host": "example.test"})
+        check(r.status == 403, f"set بدون کلید رد می‌شود ({r.status})")
+        r = await client.post("/webhook/set", headers={"Host": "example.test",
+                                                       "X-Telegram-Bot-Api-Secret-Token": "s3cr3t"})
         body = await r.json()
-        check("results" in body, f"set endpoint responds ({list(body)})")
+        check("results" in body, f"set با کلید پاسخ می‌دهد ({list(body)})")
 
-    print("\n== TEST 6: no-secret mode still accepts updates ==")
+    print("\n== TEST 6: without a secret NOTHING is accepted (secure mode) ==")
     app2 = wh.create_app(dp, bot, None, None, secret="", base_url="http://localhost:9")
     async with TestClient(TestServer(app2)) as client:
         r = await client.post("/webhook/game", json={"update_id": 9})
-        check(r.status == 200, "update accepted without a secret")
+        check(r.status == 403, f"no secret in server ⇒ forged update rejected ({r.status})")
+        r = await client.post("/webhook/game", json={"update_id": 9},
+                              headers={"X-Telegram-Bot-Api-Secret-Token": ""})
+        check(r.status == 403, "empty secret header rejected")
         r = await client.get("/webhook/info")
         data = await r.json()
         check("game" in data, f"webhook info endpoint responds ({data.get('game')})")

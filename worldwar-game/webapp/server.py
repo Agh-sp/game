@@ -27,6 +27,7 @@ from typing import Any
 from aiohttp import ClientSession, ClientTimeout, web
 
 from core import config as cfg
+from core import security as sec
 
 from . import config_service, data_service, game_meta
 from .process_manager import process_manager
@@ -181,8 +182,9 @@ async def health_payload() -> dict[str, Any]:
 
 
 def _db_info() -> dict[str, Any]:
+    # 🔒 مسیر کامل فایل دیتابیس عمومی نیست (نقشهٔ راه برای مهاجم است)
     path = Path(data_service.db_path())
-    return {"path": str(path), "size": path.stat().st_size if path.exists() else 0}
+    return {"name": path.name, "size": path.stat().st_size if path.exists() else 0}
 
 
 # ─────────────────────────── وبهوک ───────────────────────────
@@ -196,6 +198,13 @@ async def relay_webhook(kind: str, request: web.Request) -> web.Response:
     except Exception:
         payload = {}
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    expected = request.app.get("webhook_secret") or cfg.WEBHOOK_SECRET
+    # ⛔️ بدون کلید معتبر هیچ آپدیتی رله نمی‌شود (وگرنه هر کسی می‌تواند آپدیت جعلی بسازد)
+    if not sec.secret_matches(expected, secret):
+        stat["lastError"] = "invalid secret"
+        stat["lastStatus"] = 403
+        await sec.record("auth_fail", 0, f"آپدیت جعلی وبهوک {kind}", _client_ip(request))
+        return web.json_response({"ok": False, "error": "invalid secret"}, status=403)
 
     # ۱) اگر سرویس وبهوک پایتون جداگانه بالا باشد، آپدیت را به آن رله می‌کنیم
     try:
@@ -562,6 +571,12 @@ async def h_db_stats(request: web.Request) -> web.Response:
 async def h_db_table(request: web.Request) -> web.Response:
     name = request.match_info["name"]
     result = await asyncio.get_running_loop().run_in_executor(None, data_service.read_table, name)
+    # 🔒 مقدارهای محرمانه (کلید وبهوک، گذرواژهٔ پنل) هرگز در نمای جدول دیده نشوند
+    if name == "settings" and isinstance(result.get("rows"), list):
+        from core.db import SECRET_SETTING_KEYS
+        for row in result["rows"]:
+            if row.get("key") in SECRET_SETTING_KEYS or row.get("secret"):
+                row["value"] = "••••••••"
     return web.json_response(result, dumps=lambda o: json.dumps(o, ensure_ascii=False, default=str))
 
 
@@ -634,6 +649,172 @@ async def h_dev_proxy(request: web.Request) -> web.StreamResponse:
         return web.Response(text=_dev_placeholder(), content_type="text/html", charset="utf-8")
 
 
+# ─────────────────────────── 🔐 احراز هویت پنل ───────────────────────────
+# قبلاً هیچ‌کدام از مسیرهای /api/* احراز هویت نداشتند: هر کسی که آدرس پنل را
+# می‌دانست می‌توانست توکن ربات‌ها را بخواند، کاربر حذف کند یا ربات را خاموش کند.
+# حالا کل پنل پشت یک نشست امضاشده + گذرواژه است و همهٔ تلاش‌های ناموفق لاگ می‌شوند.
+
+SESSION_COOKIE = "ww_panel"
+OPEN_PATHS = ("/health", "/api/health", "/api/keepalive", "/api/keepalive/ping",
+              "/login", "/api/panel/login", "/favicon.ico")
+OPEN_PREFIXES = ("/webhook/", "/assets/")
+
+
+def _client_ip(request: web.Request) -> str:
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return (fwd.split(",")[0].strip() if fwd else (request.remote or "?"))
+
+
+def _panel_password() -> str:
+    return (os.getenv("PANEL_PASSWORD") or "").strip()
+
+
+async def _password_ok(request: web.Request, password: str) -> bool:
+    """بررسی گذرواژهٔ پنل (از .env یا دیتابیس)."""
+    try:
+        expected, _fresh = await sec.ensure_panel_password()
+    except Exception:
+        return False
+    return bool(expected) and sec.secret_matches(expected, password)
+
+
+def _session_ok(request: web.Request) -> bool:
+    token = request.cookies.get(SESSION_COOKIE, "")
+    expected = _panel_password()
+    if not expected:
+        return False
+    return sec.verify_session(expected, token)
+
+
+@web.middleware
+async def auth_middleware(request: web.Request, handler):
+    """🔒 هر درخواست به پنل باید نشست معتبر داشته باشد (به‌جز مسیرهای عمومی)."""
+    path = request.path
+    if request.method == "OPTIONS":
+        return web.Response(status=204)
+    if path in OPEN_PATHS or path.startswith(OPEN_PREFIXES):
+        return await handler(request)
+    if _session_ok(request):
+        return await handler(request)
+    if path.startswith("/api/"):
+        await sec.record("auth_fail", 0, f"درخواست بدون نشست: {request.method} {path}",
+                         _client_ip(request))
+        return web.json_response({"success": False, "error": "unauthorized",
+                                  "loginUrl": "/login"}, status=401)
+    if path in ("/", "/login"):
+        raise web.HTTPFound("/login")
+    raise web.HTTPUnauthorized(text="برای ورود به پنل ابتدا /login")
+
+
+def _login_html(error: str = "") -> str:
+    err = f"<p class='err'>{error}</p>" if error else ""
+    return f"""<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ورود به پنل فرماندهی</title>
+<style>body{{font-family:system-ui,Tahoma,sans-serif;background:#020617;color:#e2e8f0;
+display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}
+form{{background:#0f172a;border:1px solid #1e293b;border-radius:16px;padding:28px;width:320px}}
+h1{{font-size:18px;margin:0 0 18px}} input{{width:100%;padding:11px;border-radius:10px;
+border:1px solid #334155;background:#020617;color:#e2e8f0;margin-bottom:12px;box-sizing:border-box}}
+button{{width:100%;padding:11px;border:0;border-radius:10px;background:#38bdf8;color:#04121f;
+font-weight:700;cursor:pointer}} .err{{color:#f87171;font-size:13px}}
+small{{color:#64748b;font-size:12px;display:block;margin-top:10px}}</style></head><body>
+<form method="post" action="/api/panel/login">
+<h1>🔐 ورود به پنل فرماندهی</h1>{err}
+<input type="password" name="password" placeholder="گذرواژهٔ پنل" autofocus required>
+<button type="submit">ورود</button>
+<small>گذرواژه در فایل <code>.env</code> (PANEL_PASSWORD) یا در دیتابیس است.
+فراموش شد؟ در ربات ادمین «🔐 امنیت» را بزنید.</small>
+</form></body></html>"""
+
+
+async def h_login_page(request: web.Request) -> web.Response:
+    if _session_ok(request):
+        raise web.HTTPFound("/")
+    return web.Response(text=_login_html(), content_type="text/html", charset="utf-8")
+
+
+async def h_login(request: web.Request) -> web.Response:
+    """ورود با گذرواژه → ساخت نشست ۱۲ساعته."""
+    if request.content_type == "application/json":
+        payload = await json_body(request)
+    else:
+        form = await request.post()
+        payload = {k: str(v) for k, v in form.items()}
+    password = str(payload.get("password") or "").strip()
+    ip = _client_ip(request)
+
+    allowed, wait = sec.rate_ok(f"panel_login:{ip}", 0, limit=8, window_seconds=300)
+    if not allowed:
+        await sec.record("auth_fail", 0, f"ورود بیش از حد از {ip}", ip)
+        return web.json_response({"success": False,
+                                  "error": f"تلاش بیش از حد — {wait} ثانیه صبر کنید"},
+                                 status=429)
+    if not await _password_ok(request, password):
+        await sec.record("auth_fail", 0, f"گذرواژهٔ اشتباه از {ip}", ip)
+        try:
+            await sec.alert(request.app.get("admin_bot"),
+                            f"🔑 تلاش ناموفق برای ورود به پنل وب\nIP: <code>{ip}</code>")
+        except Exception:
+            pass
+        if request.content_type != "application/json":
+            return web.Response(text=_login_html("گذرواژه اشتباه است."),
+                                content_type="text/html", charset="utf-8", status=401)
+        return web.json_response({"success": False, "error": "گذرواژه اشتباه است"},
+                                 status=401)
+
+    expected, _fresh = await sec.ensure_panel_password()
+    token = sec.sign_session(expected)
+    await sec.record("lock", 0, f"ورود موفق به پنل از {ip}", ip)
+    if request.content_type == "application/json":
+        resp = web.json_response({"success": True, "token": token})
+    else:
+        resp = web.Response(status=303, headers={"Location": "/"})
+    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="Lax",
+                    max_age=sec.PANEL_TOKEN_TTL, path="/")
+    return resp
+
+
+async def h_logout(request: web.Request) -> web.Response:
+    resp = web.json_response({"success": True})
+    resp.del_cookie(SESSION_COOKIE, path="/")
+    return resp
+
+
+async def h_panel_security(request: web.Request) -> web.Response:
+    """وضعیت امنیتی پنل: رخدادها و شمارش‌ها (فقط برای ادمین واردشده)."""
+    counts = await sec.counts_since(24)
+    events = await sec.recent(limit=30)
+    return ok({"counts": counts, "events": events,
+               "hints": [
+                   "کلید وبهوک و گذرواژهٔ پنل در جدول settings پنهان هستند.",
+                   "هر درخواست بدون نشست به /api/ با 401 رد و ثبت می‌شود.",
+                   "پیام همگانی فقط با کد تأیید از ربات ادمین/پنل ادمین ارسال می‌شود.",
+               ]})
+
+
+async def h_security_rotate(request: web.Request) -> web.Response:
+    """چرخش کلید وبهوک/گذرواژهٔ پنل از داخل پنل (نیاز به نشست معتبر)."""
+    payload = await json_body(request)
+    what = str(payload.get("what") or "webhook").lower()
+    ip = _client_ip(request)
+    if what == "password":
+        new = str(payload.get("value") or "").strip()
+        pwd = await sec.set_panel_password(new)
+        await sec.record("lock", 0, f"گذرواژهٔ پنل از پنل وب تغییر کرد ({ip})", ip)
+        return ok({"password": pwd,
+                   "message": "گذرواژهٔ تازه ساخته شد؛ همین حالا از پنل خارج و دوباره وارد شوید."})
+    import secrets as _secrets
+    fresh = _secrets.token_urlsafe(32)
+    from core.db import set_setting
+    await set_setting("webhook_secret", fresh)
+    os.environ["WEBHOOK_SECRET"] = fresh
+    cfg.WEBHOOK_SECRET = fresh
+    await sec.record("lock", 0, f"کلید وبهوک از پنل وب چرخانده شد ({ip})", ip)
+    return ok({"secret": fresh,
+               "message": "کلید تازه ساخته شد — وبهوک را دوباره ثبت کنید (/api/webhook/set)."})
+
+
 # ─────────────────────────── ساخت برنامه ───────────────────────────
 
 def create_app(game_bot: Any = None, game_dp: Any = None,
@@ -642,6 +823,8 @@ def create_app(game_bot: Any = None, game_dp: Any = None,
     app = web.Application(client_max_size=16 * 1024 * 1024)
     app["bots"] = {"game": game_bot, "admin": admin_bot}
     app["dps"] = {"game": game_dp, "admin": admin_dp}
+    app["admin_bot"] = admin_bot
+    app.middlewares.append(auth_middleware)
 
     r = app.router
     # سلامت و مانیتورینگ
@@ -652,6 +835,13 @@ def create_app(game_bot: Any = None, game_dp: Any = None,
     r.add_get("/api/keepalive", h_keepalive)
     r.add_post("/api/keepalive", h_keepalive)
     r.add_post("/api/keepalive/ping", h_keepalive_ping)
+
+    # ورود/خروج پنل + وضعیت امنیتی
+    r.add_get("/login", h_login_page)
+    r.add_post("/api/panel/login", h_login)
+    r.add_post("/api/panel/logout", h_logout)
+    r.add_get("/api/panel/security", h_panel_security)
+    r.add_post("/api/panel/security/rotate", h_security_rotate)
 
     # تنظیمات و توکن‌ها
     r.add_get("/api/secrets", h_secrets)
@@ -706,6 +896,18 @@ def create_app(game_bot: Any = None, game_dp: Any = None,
         r.add_get("/{path:.*}", h_index)
 
     async def _on_startup(app: web.Application) -> None:
+        # گذرواژهٔ پنل و کلید وبهوک تضمین می‌شوند (اگر تنظیم نشده باشند ساخته می‌شوند)
+        try:
+            app["panel_password"], freshly_made = await sec.ensure_panel_password()
+            if freshly_made:
+                log.warning("🔐 گذرواژهٔ پنل وب ساخته شد — برای دیدن آن در ربات ادمین "
+                            "«🔐 امنیت» را بزنید")
+        except Exception:
+            log.exception("آماده‌سازی گذرواژهٔ پنل ناموفق بود")
+        try:
+            app["webhook_secret"], _made = await sec.ensure_webhook_secret()
+        except Exception:
+            log.exception("آماده‌سازی کلید وبهوک ناموفق بود")
         app["keepalive_task"] = asyncio.create_task(keepalive_loop(app))
         # اجرای خودکار ربات‌ها فقط از طریق run_all.py/serve.py یا AUTOSTART_BOTS=1
         if autostart and cfg.BOTS_AUTOSTART:

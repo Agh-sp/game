@@ -528,8 +528,9 @@ async def eq_qty_input(message: Message, state: FSMContext):
         qty = int(message.text.strip())
     except (ValueError, TypeError):
         return await send_home(message, "❌ لطفاً فقط عدد بفرستید.")
-    if qty <= 0 or qty > 100000:
-        return await send_home(message, "❌ عدد باید بین ۱ تا ۱۰۰هزار باشد.")
+    # 🔓 سقف خرید تجهیزات برداشته شد (فقط محدودیت منطقی سرریز)
+    if qty <= 0 or qty > 10_000_000:
+        return await send_home(message, "❌ عدد باید بین ۱ تا ۱۰ میلیون باشد.")
     data = await state.get_data()
     e = await db.fetchone("SELECT * FROM equipment WHERE id=?", (data["eq_id"],))
     user = await db.fetchone("SELECT * FROM users WHERE id=?", (message.from_user.id,))

@@ -128,7 +128,8 @@ async def war_room(call: CallbackQuery):
     await call.message.edit_text(text, reply_markup=kb([
         [("📢 اعلان جنگ", "g|wdec")],
         [("🗡 حمله (عادی / تسخیر)", "g|watk")],
-        [("☢️ هدف قرار دادن تأسیسات هسته‌ای", "g|nuk")],
+        [("☢️ تأسیسات هسته‌ای دشمن (حملهٔ موشکی)", "g|nuk")],
+        [("💣 زرادخانهٔ اتمی من (ساخت/شلیک)", "g|nuke")],
         [("🎯 خرابکاری در هر سازهٔ دشمن", "g|sab")],
         [("🕶 سایبری", "g|wcyb")],
         [("🕊 آتش‌بس و صلح", "g|cease")],
@@ -692,6 +693,29 @@ async def attack_confirm(call: CallbackQuery, state: FSMContext):
         (call.from_user.id,))
     if soldiers and soldiers["c"]:
         lines.append(f"  🪖 {fmt(soldiers['c'])} سرباز")
+    # 🚚 تدارکات لازم و 🕵 مه اطلاعات (پیش‌بینی بازه‌ای، نه عدد قطعی)
+    try:
+        from core import supply as supply_mod
+        units = sum(int(v) for v in plan.values()) + int((soldiers or {}).get("c") or 0)
+        need = await supply_mod.need_for_attack(call.from_user.id, units)
+        st = await supply_mod.get(call.from_user.id)
+        lines.append(f"\n🚚 <b>تدارکات لازم:</b> {fmt(need['ammo'])} مهمات + "
+                     f"{fmt(need['fuel'])} سوخت")
+        lines.append(f"   انبار شما: {fmt(st['ammo'])} مهمات | {fmt(st['fuel'])} سوخت "
+                     f"(اثر قدرت ×{await supply_mod.factor(call.from_user.id)})")
+    except Exception:
+        log.exception("supply preview failed")
+    try:
+        from core import intel as intel_mod
+        lines.append("\n" + await intel_mod.battle_preview(call.from_user.id, war["defender_id"]))
+    except Exception:
+        log.exception("intel preview failed")
+    try:
+        from core import weather as weather_mod
+        if await weather_mod.attack_multiplier() != 1.0:
+            lines.append("\n" + await weather_mod.season_line())
+    except Exception:
+        pass
     lines.append("\nآیا مطمئن هستید؟")
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb([
@@ -843,6 +867,41 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     if wear_before > 0:
         atk_power *= 1.0 + (wear_before / 100.0) * 0.25
 
+    # 🚚 زنجیرهٔ تأمین: مهمات و سوخت این عملیات از انبار کسر می‌شود
+    extra_supply_lines: list[str] = []
+    try:
+        from core import supply as supply_mod
+        _soldier_row = await db.fetchone(
+            "SELECT COALESCE(SUM(quantity),0) c FROM player_assets WHERE user_id=? AND item_type='soldier'",
+            (attacker_id,))
+        units = sum(plan.values()) + int((_soldier_row or {}).get("c") or 0)
+        sup = await supply_mod.consume_attack(attacker_id, units)
+        atk_power *= sup["factor"]
+        extra_supply_lines = sup.get("lines") or []
+        # انبار خالی مدافع هم پدافند را می‌شکند
+        d_def *= await supply_mod.unfed_factor(defender_id)
+    except Exception:
+        log.exception("supply apply failed")
+    # ❄️ آب‌وهوا: زمستان و طوفان عملیات را کند می‌کند
+    try:
+        from core import weather as weather_mod
+        atk_power *= await weather_mod.attack_multiplier()
+    except Exception:
+        pass
+    # 🏛 حزب حاکم نظامی: بونوس حمله
+    try:
+        from core import elections as elections_mod
+        atk_power *= 1.0 + await elections_mod.attack_bonus(attacker_id)
+    except Exception:
+        pass
+    # 📡 پایگاه خارجی: میزبان بونوس دفاعی و مهمان بونوس حمله می‌گیرد
+    try:
+        from core import bases as bases_mod
+        d_def *= await bases_mod.defense_bonus(defender_id)
+        atk_power *= await bases_mod.attack_bonus(attacker_id)
+    except Exception:
+        pass
+
     chance = combat.battle_chance(atk_power, d_def)
     won = random.random() < chance
     atk_loss, def_loss = combat.loss_ratios(chance, strat)
@@ -862,20 +921,26 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         pass
 
     # ─── کسر تلفات واقعی از هر دو طرف (تجهیزات + سرباز) ───
-    atk_rows = await combat.equipment_rows(attacker_id, only_ids=[int(i) for i in plan.keys()])
-    atk_destroyed_names, atk_lost_units = await combat.apply_losses(
-        attacker_id, atk_rows, atk_loss, "equipment")
-    def_destroyed_names, def_lost_units = await combat.apply_losses(
-        defender_id, def_equipment_list, def_loss * await attr.loss_multiplier(defender_id),
-        "equipment")
+    # 🎯 فقط یگان‌های واقعاً درگیر تلفات سنگین می‌دهند و تعداد کشته‌شدگان مدافع
+    # به اندازهٔ نیروی اعزامی مهاجم سقف دارد — نه درصدی از کل انبار.
+    deployed_ids = [int(i) for i in plan.keys()]
+    combat.set_deployed(attacker_id, "equipment", deployed_ids)
+    atk_destroyed_names, atk_lost_units, atk_loss_note = await combat.apply_attrition_losses(
+        attacker_id, await combat.equipment_rows(attacker_id), atk_loss, "equipment")
+    defend_kill_cap = await combat.defend_cap(attacker_id, sum(int(v) for v in plan.values()))
+    def_destroyed_names, def_lost_units = await combat.apply_capped_losses(
+        defender_id, def_equipment_list,
+        def_loss * await attr.loss_multiplier(defender_id), defend_kill_cap, "equipment")
 
     # سربازان دو طرف هم در نبرد کشته می‌شوند
     s_atk, s_atk_units = await combat.apply_soldier_losses(attacker_id, atk_loss * 0.7)
     if s_atk:
         atk_destroyed_names += s_atk
         atk_lost_units += s_atk_units
-    s_def, s_def_units = await combat.apply_soldier_losses(
-        defender_id, def_loss * 0.6 * await attr.loss_multiplier(defender_id))
+    s_def, s_def_units = await combat.apply_capped_losses(
+        defender_id, await combat.soldier_rows(defender_id),
+        def_loss * 0.6 * await attr.loss_multiplier(defender_id),
+        max(60, defend_kill_cap * 40), "soldier")
     if s_def:
         def_destroyed_names += s_def
         def_lost_units += s_def_units
@@ -906,6 +971,16 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
 
     extra_lines = []
     extra_lines.extend(attrition_lines)
+    if atk_loss_note:
+        extra_lines.append("🎯 " + atk_loss_note)
+    extra_lines.extend(extra_supply_lines)
+    # 📡 ورود خودکار متحد قراردادی (پایگاه خارجی)
+    try:
+        from core import bases as bases_mod
+        extra_lines.extend(await bases_mod.auto_join_if_attacked(
+            call.bot, defender_id, attacker_id))
+    except Exception:
+        log.exception("foreign base auto join failed")
     if intercepted_missiles:
         extra_lines.append(
             f"🛡️ <b>پدافند هوایی مدافع:</b> {round(intercept_rate * 100)}٪ از موشک‌ها و راکت‌های شلیک‌شده "

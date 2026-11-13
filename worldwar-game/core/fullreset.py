@@ -36,6 +36,8 @@ CLEAR_TABLES: tuple[str, ...] = (
     "enrichment",
     "nuclear_strikes",
     "nuclear_sites",
+    "nuclear_bombs",
+    "nuclear_arsenal",
     "country_attrition",
     "sabotage_ops",
     "internet_infra",
@@ -70,6 +72,16 @@ CLEAR_TABLES: tuple[str, ...] = (
     "season_votes",
     "mission_claims",
     "daily_progress",
+    # 🧨 موتور واقع‌گرایی (نسخهٔ ۹)
+    "supply_stock",
+    "strikes",
+    "debts",
+    "refugee_flows",
+    "intel_levels",
+    "intel_reports",
+    "party_state",
+    "season_weather",
+    "market_history",
     "states",
 )
 
@@ -82,6 +94,8 @@ USER_COLUMNS: dict[str, tuple[str, ...]] = {
     "bases": ("host_id", "guest_id"),
     "enrichment": ("user_id",),
     "nuclear_sites": ("user_id",),
+    "nuclear_arsenal": ("user_id",),
+    "nuclear_bombs": ("owner_id",),
     "nuclear_strikes": ("attacker_id", "defender_id"),
     "country_attrition": ("user_id",),
     "sabotage_ops": ("attacker_id", "defender_id"),
@@ -114,6 +128,14 @@ USER_COLUMNS: dict[str, tuple[str, ...]] = {
     "season_ballots": ("user_id",),
     "mission_claims": ("user_id",),
     "daily_progress": ("user_id",),
+    # 🧨 موتور واقع‌گرایی (نسخهٔ ۹)
+    "supply_stock": ("user_id",),
+    "strikes": ("user_id",),
+    "debts": ("user_id",),
+    "refugee_flows": ("from_user", "to_user"),
+    "intel_levels": ("user_id",),
+    "intel_reports": ("attacker_id", "defender_id"),
+    "party_state": ("user_id",),
     "states": ("user_id",),
 }
 
