@@ -261,11 +261,19 @@ async def oil_income(user_id: int, growth: float = 1.0) -> dict:
             sanction_mult = 0.5
     except Exception:
         sanction_mult = 1.0
-    amount = int(eff_base * 1_000_000 * rig_mult * level_mult * growth * sanction_mult)
+    # 🛢 بازار جهانی: قیمت هر بشکه روی درآمد همهٔ کشورهای نفت‌خیز اثر می‌گذارد
+    market_mult = 1.0
+    try:
+        from core import market as market_mod
+        market_mult = await market_mod.oil_multiplier()
+    except Exception:
+        market_mult = 1.0
+    amount = int(eff_base * 1_000_000 * rig_mult * level_mult * growth * sanction_mult
+                 * market_mult)
     return {"amount": amount, "base_m": base_m, "eff_base_m": round(eff_base, 2),
             "rigs": rigs, "rig_mult": round(rig_mult, 2),
             "level_mult": round(level_mult, 2), "bonus_pct": bonus_pct,
-            "sanctioned": sanction_mult < 1.0}
+            "sanctioned": sanction_mult < 1.0, "market_mult": market_mult}
 
 
 async def resource_income(user_id: int, growth: float = 1.0) -> dict:
@@ -354,6 +362,55 @@ async def income_sources(user_id: int) -> dict:
     except Exception:
         pass
 
+    # ─── ✊🧨 اثرهای اقتصاد کلان و اجتماعی بر کل درآمد ───
+    mods: dict[str, float] = {}
+    try:
+        from core import unrest as _unrest
+        m = await _unrest.income_multiplier(user_id)
+        if m != 1.0:
+            mods["✊ ناآرامی/اعتصاب"] = m
+    except Exception:
+        pass
+    try:
+        from core import grid as _grid
+        m = await _grid.income_multiplier(user_id)
+        if m != 1.0:
+            mods["⚡ خاموشی شبکه"] = m
+    except Exception:
+        pass
+    try:
+        from core import market as _market
+        m = await _market.inflation_income_multiplier(user_id)
+        if m != 1.0:
+            mods["💸 تورم"] = m
+    except Exception:
+        pass
+    try:
+        from core import elections as _el
+        b = await _el.income_bonus(user_id)
+        if b:
+            mods["🏛 حزب حاکم"] = 1.0 + b
+    except Exception:
+        pass
+    weather_bonus = 0
+    try:
+        from core import weather as _weather
+        weather_bonus = await _weather.income_bonus(user_id)
+    except Exception:
+        weather_bonus = 0
+    if weather_bonus:
+        mods["🍂 برداشت پاییز"] = 1.0 + weather_bonus / max(1, total)
+
+    combined = 1.0
+    for value in mods.values():
+        combined *= value
+    if combined != 1.0:
+        tax, oil, strait, res = (dict(tax), dict(oil), dict(strait), dict(res))
+        for bucket in (tax, oil, strait, res):
+            bucket["amount"] = int(bucket["amount"] * combined)
+        tax["social_mult"] = round(combined, 3)
+        total = tax["amount"] + oil["amount"] + strait["amount"] + res["amount"]
+
     floor_total = int(await _num_setting("income_floor_m", DEFAULT_FLOOR_M) * 1_000_000)
     if total < floor_total:
         tax = dict(tax)
@@ -368,6 +425,8 @@ async def income_sources(user_id: int) -> dict:
         "strait": strait,
         "resource": res,
         "total": total,
+        "modifiers": mods,
+        "weather_bonus": weather_bonus,
     }
 
 
@@ -411,6 +470,9 @@ async def income_breakdown_lines(user_id: int) -> list[str]:
     if g.get("internet"):
         parts.append(f"🌐 اینترنت سطح {g.get('internet_level', 0)} "
                      f"+{round(g['internet'] * 100)}٪")
+    mods = src.get("modifiers") or {}
+    if mods:
+        lines.append("  ⚖️ " + " • ".join(f"{k} ×{v}" for k, v in mods.items()))
     if parts:
         lines.append("  🔧 " + " • ".join(parts))
     elif g["mult"] < g["cap"]:

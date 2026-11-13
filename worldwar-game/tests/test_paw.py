@@ -89,41 +89,48 @@ def main():
     H.check((again.get("tasks") or {}).get("ran") is False, "اجرای تکراری در بازهٔ کوتاه محدود می‌شود")
 
     print("\n== TEST 3: وبهوک — تحویل آپدیت تلگرام ==")
+    # 🔐 کلید وبهوک برای همهٔ آپدیت‌ها لازم است (بدون کلید هیچ آپدیتی پذیرفته نمی‌شود)
+    os.environ["WEBHOOK_SECRET"] = "s3cr3t-very-long-test-key-123456"
+    from core import config as _cfg
+    _cfg.WEBHOOK_SECRET = "s3cr3t-very-long-test-key-123456"
+    hdr = {"X-Telegram-Bot-Api-Secret-Token": "s3cr3t-very-long-test-key-123456"}
     update = {
         "update_id": 42,
         "message": {
-            "message_id": 1, "date": 1700000000,
+            "message_id": 1, "date": int(__import__("time").time()),
             "chat": {"id": 6500991787, "type": "private"},
             "from": {"id": 6500991787, "is_bot": False, "first_name": "Tester"},
             "text": "/start",
         },
     }
     H.SENT.clear()
-    status, body = call("/webhook/game", "POST", update)
+    status, body = call("/webhook/game", "POST", update, hdr)
     H.check(status.startswith("200") and body.get("handled") is True, "آپدیت ربات بازی پردازش شد")
     H.check(len(H.SENT) > 0, f"ربات پاسخ فرستاد ({len(H.SENT)} پیام)")
-    status, body = call("/webhook/admin", "POST", {"update_id": 43})
+    status, body = call("/webhook/admin", "POST", {"update_id": 43}, hdr)
     H.check(status.startswith("200"), "آپدیت ربات ادمین هم پذیرفته می‌شود")
-    status, body = call("/webhook/game", "POST", {})
+    status, body = call("/webhook/game", "POST", {}, hdr)
     H.check(status.startswith("200") and body.get("empty") is True, "آپدیت خالی بی‌خطا رد می‌شود")
 
     print("\n== TEST 4: کلید امنیتی وبهوک ==")
-    os.environ["WEBHOOK_SECRET"] = "s3cr3t"
     try:
         status, body = call("/webhook/game", "POST", update)
         H.check(status.startswith("403"), "بدون هدر secret → 403")
         status, body = call("/webhook/game", "POST", update,
-                            {"X-Telegram-Bot-Api-Secret-Token": "s3cr3t"})
+                            {"X-Telegram-Bot-Api-Secret-Token": "s3cr3t-very-long-test-key-123456"})
         H.check(status.startswith("200"), "با هدر secret درست → 200")
     finally:
         os.environ.pop("WEBHOOK_SECRET", None)
+        _cfg.WEBHOOK_SECRET = ""
 
     print("\n== TEST 5: مسیرهای مدیریت وبهوک ==")
     status, info = call("/info")
     H.check(status.startswith("200") and "game" in info and "admin" in info,
             "اطلاعات وبهوک هر دو ربات (بدون خطا حتی بدون شبکه)")
     status, res = call("/setup")
-    H.check(status.startswith("200") and "results" in res, "ثبت وبهوک پاسخ ساختاریافته می‌دهد")
+    H.check(status.startswith("403"), f"ثبت وبهوک بدون کلید رد می‌شود ({status})")
+    status, res = call("/setup", "GET", None, hdr)
+    H.check(status.startswith("200") and "results" in res, "ثبت وبهوک با کلید پاسخ ساختاریافته می‌دهد")
     H.check(res.get("baseUrl", "").endswith("/webhook") is False, "آدرس پایه درست ساخته می‌شود")
 
     print("\n== TEST 6: مسیر ناموجود ==")

@@ -39,7 +39,8 @@ def root_text(admin: dict) -> str:
         "/reset_players — 🧨 ریست کل بازی (پاک‌سازی ۱۰۰٪ پیشرفت همه)\n/bc — پیام همگانی\n"
         "/resetcountry <آیدی> — ریست کشور یک بازیکن و انتخاب کشور تازه\n"
         "/receipts — فیش‌های در انتظار\n/tickets — تیکت‌ها\n/settings — تنظیمات\n/logs — لاگ‌ها\n"
-        "/daily — گزارش ۲۴ ساعت اخیر\n/images — کتابخانه تصاویر")
+        "/daily — گزارش ۲۴ ساعت اخیر\n/images — کتابخانه تصاویر\n"
+        "🔐 امنیت — قفل همگانی، کلید وبهوک، گذرواژهٔ پنل و رخدادهای مشکوک")
 
 
 def root_kb(perms: set) -> InlineKeyboardMarkup:
@@ -80,6 +81,8 @@ def root_kb(perms: set) -> InlineKeyboardMarkup:
         rows.append([("🛡 ادمین‌ها", "a|adm")])
     if show("logs"):
         rows.append([("📜 لاگ‌ها", "a|log|0")])
+    if show("settings") or show("logs"):
+        rows.append([("🔐 امنیت و دسترسی", "a|sec")])
     rows.append([("🔥 فایربیس (اتصال سرور)", "a|fb")])
     rows.append([("📋 گزارش ۲۴ ساعت اخیر", "a|daily")])
     rows.append([("🗄 دیتابیس خام (همه جدول‌ها)", "a|db")])

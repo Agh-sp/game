@@ -239,6 +239,16 @@ def blocked_banner(state: dict) -> str:
     elif state.get("leader_block_until") and not is_past(state["leader_block_until"]):
         parts.append(f"🚫 <b>رهبر شما ترور شده!</b> ({fmt_hm(hours_left(state['leader_block_until']))} مانده)\n"
                      "حمله و دیپلماسی مسدود است.")
+    # ✊ اعتصاب سراسری یا 🔥 جنگ داخلی فعال
+    if state.get("strike_until") and not is_past(state["strike_until"]):
+        demand = f" — خواسته: {state['strike_demand']}" if state.get("strike_demand") else ""
+        parts.append(f"✊ <b>اعتصاب سراسری فعال است</b> "
+                     f"({fmt_hm(hours_left(state['strike_until']))} مانده){demand}\n"
+                     "درآمد کشور نصف شده و شرکت‌ها تعطیل‌اند — «🛡 امنیت و کشور» → «✊ ناآرامی».")
+    if state.get("revolt_until") and not is_past(state["revolt_until"]):
+        parts.append(f"🔥 <b>جنگ داخلی جریان دارد</b> "
+                     f"({fmt_hm(hours_left(state['revolt_until']))} مانده)\n"
+                     "درآمد به یک‌سوم رسیده — فوراً از «✊ ناآرامی و اعتصاب» تصمیم بگیرید.")
     return ("\n".join(parts) + "\n\n") if parts else ""
 
 
@@ -319,5 +329,6 @@ def manage_kb() -> InlineKeyboardMarkup:
         [("🧱 خرید مصالح ساختمانی", "g|matshop")],
         [("🏢 شرکت‌های من", "g|comp")],
         [("🛒 بازار تسلیحات", "g|arms")],
+        [("🛡 امنیت و کشور (تأمین، ناآرامی، اقتصاد…)", "g|state")],
         home_row(),
     ])

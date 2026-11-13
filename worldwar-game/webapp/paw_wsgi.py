@@ -249,7 +249,8 @@ async def run_due_tasks() -> dict[str, Any]:
     result["ran"] = True
 
     from core.db import get_setting
-    from core.scheduler import income_tick, main_currency_recompute, rescue_task, season_votes_task
+    from core.scheduler import (enrich_settle_task, income_tick, main_currency_recompute,
+                                rescue_task, season_votes_task)
 
     tasks: list[str] = []
     bot = registry.game_bot
@@ -272,7 +273,8 @@ async def run_due_tasks() -> dict[str, Any]:
     if bot is not None:
         for name, fn in (("settle_votes", _settle_votes), ("seasons", season_votes_task),
                          ("rescue", rescue_task), ("currency", main_currency_recompute),
-                         ("oil", _oil_tick), ("revolution", _revolution_tick)):
+                         ("oil", _oil_tick), ("revolution", _revolution_tick),
+                         ("enrichment", enrich_settle_task), ("nuke", _nuke_settle)):
             try:
                 await fn(bot)
                 tasks.append(name)
@@ -280,6 +282,12 @@ async def run_due_tasks() -> dict[str, Any]:
                 log.exception("%s failed", name)
     result["tasks"] = tasks
     return result
+
+
+async def _nuke_settle(bot) -> None:
+    """☢️ تحویل کلاهک‌های هسته‌ای آماده (روی PythonAnywhere زمان‌بند دائمی نداریم)."""
+    from core import nuke as nuke_mod
+    await nuke_mod.settle_all(bot)
 
 
 async def _settle_votes(bot) -> None:  # type: ignore[no-untyped-def]
@@ -299,15 +307,39 @@ async def _revolution_tick(bot) -> None:  # type: ignore[no-untyped-def]
 
 # ─────────────────────────── امنیت و ابزار آپدیت ───────────────────────────
 
-def _secret_ok(environ: dict[str, Any]) -> bool:
-    """بررسی هدر X-Telegram-Bot-Api-Secret-Token (اگر WEBHOOK_SECRET تنظیم شده باشد)."""
-    from core import config as cfg
-    expected = os.getenv("WEBHOOK_SECRET") or cfg.WEBHOOK_SECRET
-    if not expected:
-        return True
+def _secret_ok(environ: dict[str, Any], expected: str | None = None) -> bool:
+    """بررسی هدر X-Telegram-Bot-Api-Secret-Token.
+
+    ⛔️ اگر کلیدی تنظیم نشده باشد، **هیچ** آپدیتی پذیرفته نمی‌شود؛ پیش‌تر در این
+    حالت بررسی انجام نمی‌شد و هر کسی می‌توانست آپدیت جعلی بفرستد.
+    """
+    from core.security import secret_matches
+
+    if expected is None:
+        from core import config as cfg
+        expected = os.getenv("WEBHOOK_SECRET") or cfg.WEBHOOK_SECRET
     key = "HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN"
     got = environ.get(key) or environ.get(key.lower()) or ""
-    return str(got) == str(expected)
+    return secret_matches(expected or "", str(got))
+
+
+_SECRET_CACHE: dict[str, str] = {}
+
+
+def _ensure_secret() -> str:
+    """کلید وبهوک را (از .env یا دیتابیس) تضمین می‌کند؛ اگر نبود می‌سازد."""
+    from core import security as sec
+    cached = _SECRET_CACHE.get("value")
+    if cached:
+        return cached
+    try:
+        secret, _fresh = runner.run(sec.ensure_webhook_secret(), timeout=30)
+        _SECRET_CACHE["value"] = secret
+        return secret
+    except Exception:
+        log.exception("آماده‌سازی کلید وبهوک ناموفق بود")
+        from core import config as cfg
+        return os.getenv("WEBHOOK_SECRET") or cfg.WEBHOOK_SECRET
 
 
 def _json(environ: dict[str, Any]) -> dict[str, Any]:
@@ -336,7 +368,7 @@ def _base_url(environ: dict[str, Any]) -> str:
 def _set_webhooks(base: str) -> dict[str, Any]:
     from core import config as cfg
 
-    secret = os.getenv("WEBHOOK_SECRET") or cfg.WEBHOOK_SECRET
+    secret = _ensure_secret()
     allowed = ["message", "callback_query", "inline_query", "channel_post",
                "chat_member", "my_chat_member"]
     out: dict[str, Any] = {}
@@ -399,8 +431,11 @@ def application(environ: dict[str, Any], start_response):  # noqa: ANN001
                 info["tasks"] = runner.run(run_due_tasks())
             return respond("200 OK", info)
 
-        # ── ثبت وبهوک ──
+        # ── ثبت وبهوک (فقط با کلید معتبر، تا کسی وبهوک را به سرور خودش نبرد) ──
         if path in ("/setup", "/api/webhook/set"):
+            secret_now = _ensure_secret()
+            if not _secret_ok(environ, secret_now):
+                return respond("403 Forbidden", {"ok": False, "error": "invalid secret token"})
             base = _base_url(environ)
             result = _set_webhooks(base)
             return respond("200 OK", {"success": any(v.get("ok") for v in result.values()),
@@ -437,7 +472,7 @@ def application(environ: dict[str, Any], start_response):  # noqa: ANN001
         if path in ("/webhook/game", "/webhook/admin") or path.startswith("/webhook/"):
             if method != "POST":
                 return respond("200 OK", {"ok": True, "hint": "این مسیر فقط POST می‌پذیرد"})
-            if not _secret_ok(environ):
+            if not _secret_ok(environ, _ensure_secret()):
                 return respond("403 Forbidden", {"ok": False, "error": "invalid secret token"})
             kind = "admin" if path.endswith("admin") else "game"
             payload = _json(environ)

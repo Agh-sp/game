@@ -17,9 +17,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
+import os
+import secrets
+
+from core import config as cfg
+from core import security as sec
 from core.admins import is_admin, is_super_admin
 from core.db import db, get_setting, set_setting
-from core.utils import fmt, fmt_money, iso
+from core.utils import fmt, fmt_money, is_past, iso
 from gamebot.common import home_row, kb, send_home
 
 router = Router()
@@ -30,6 +35,7 @@ class PanelFSM(StatesGroup):
     amount = State()      # گرفتن مبلغ/تعداد
     eq_qty = State()      # تعداد تجهیز انتخاب‌شده
     text = State()        # متن پیام همگانی
+    bc_confirm = State()  # کد تأیید پیام همگانی
     value = State()       # مقدار تنظیمات
 
 
@@ -139,6 +145,7 @@ def panel_kb(superadmin: bool = False) -> object:
         [("🔓 آزادکردن قفل‌ها", "p|op|unlock"), ("🔍 کارت کاربر", "p|op|card")],
         [("🧾 فیش‌های منتظر", "p|rec"), ("📢 پیام همگانی", "p|bc")],
         [("📜 لاگ فیش و کاربران", "p|logs"), ("👑 مدیریت ادمین‌ها", "p|admins")],
+        [("🔐 امنیت و دسترسی", "p|sec")],
         [("⚙️ تنظیمات سریع", "p|setmenu")],
         [("🧨 ریست کل بازی (پاک‌سازی ۱۰۰٪)", "p|resetmenu")],
     ]
@@ -410,6 +417,10 @@ async def panel_receipt_action(call: CallbackQuery):
         return
     approve = call.data.startswith("p|recok|")
     rid = int(call.data.split("|")[2])
+    if approve and not await is_super_admin(call.from_user.id):
+        # 🛡 تأیید فیش = واگذاری پول/کشور به یک کاربر؛ فقط سوپرادمین
+        await sec.record("user_edit", call.from_user.id, f"تلاش تأیید فیش #{rid} بدون دسترسی سوپر")
+        return await call.answer("⛔️ تأیید فیش فقط برای سوپرادمین مجاز است.", show_alert=True)
     r = await db.fetchone("SELECT * FROM receipts WHERE id=?", (rid,))
     if not r or r["status"] != "pending":
         return await call.answer("این فیش قبلاً بررسی شده است.", show_alert=True)
@@ -462,17 +473,48 @@ async def panel_receipt_action(call: CallbackQuery):
     await panel_receipts(call, answer=False)
 
 
-# ─── پیام همگانی ───
+# ─── 📣 پیام همگانی (با تأیید دو‌مرحله‌ای + لاگ امنیتی) ───
+
+
+async def _bc_guard(target) -> bool:
+    """فقط سوپرادمین + قفل/سقف ارسال. با پیام روشن، دلیل رد را می‌گوید.
+
+    `target` می‌تواند Message یا CallbackQuery باشد (فرستنده از `from_user`).
+    """
+    from adminbot.handlers.broadcast import broadcast_guard
+    from core.admins import is_super_admin
+
+    sender = getattr(target, "from_user", None) or target
+    user_id = int(getattr(sender, "id", 0) or 0)
+    is_call = isinstance(target, CallbackQuery)
+
+    async def _deny(msg: str) -> bool:
+        if is_call:
+            await target.answer(msg, show_alert=True)
+        else:
+            await send_home(target, msg, reply_markup=panel_kb())
+        return False
+
+    if not await is_super_admin(user_id):
+        await sec.record("broadcast_denied", user_id, "غیرسوپرادمین از پنل بازی")
+        return await _deny("⛔️ ارسال همگانی فقط برای سوپرادمین مجاز است.")
+    ok, why = await broadcast_guard(user_id)
+    if not ok:
+        return await _deny(why)
+    return True
 
 
 @router.callback_query(F.data == "p|bc")
 async def panel_broadcast_start(call: CallbackQuery, state: FSMContext):
     if not await _guard(call):
         return
+    if not await _bc_guard(call):
+        return
     await state.set_state(PanelFSM.text)
     await call.answer()
     await call.message.edit_text(
-        "📢 متن پیام همگانی را بفرستید. این پیام برای همهٔ بازیکنان ارسال می‌شود.\n"
+        "📣 متن پیام همگانی را بفرستید. این پیام برای همهٔ بازیکنان ارسال می‌شود.\n"
+        "پس از فرستادن متن، یک <b>کد تأیید ۴رقمی</b> می‌گیرید.\n"
         "برای انصراف /cancel")
 
 
@@ -480,20 +522,208 @@ async def panel_broadcast_start(call: CallbackQuery, state: FSMContext):
 async def panel_broadcast_send(message: Message, state: FSMContext):
     if not await _guard(message):
         return
-    text = (message.text or "").strip()
-    if not text:
+    if not await _bc_guard(message):
+        return
+    raw = (message.text or "").strip()
+    if not raw:
         return await send_home(message, "❌ متن خالی است. دوباره بفرستید یا /cancel")
+    text, warnings = sec.sanitize_text(raw)
+    if not text.strip():
+        return await send_home(message, "❌ متن پس از پاک‌سازی خالی شد — دوباره بفرستید.")
+    if warnings:
+        await sec.record("weird_text", message.from_user.id, "; ".join(warnings))
+    users = (await db.fetchone("SELECT COUNT(*) c FROM users WHERE banned=0"))["c"]
+    code = sec.make_code(message.from_user.id, text)
+    await state.set_state(PanelFSM.bc_confirm)
+    await send_home(
+        message,
+        f"👁 <b>پیش‌نمایش پیام</b> برای {fmt(users)} بازیکن:\n\n{'─' * 24}\n{text}\n{'─' * 24}\n\n"
+        f"🔐 <b>کد تأیید: <code>{code}</code></b>\n"
+        "کد را در پیام بعدی بفرستید (۱۰ دقیقه اعتبار / یک‌بار مصرف). برای انصراف /cancel",
+        reply_markup=panel_kb())
+
+
+@router.message(PanelFSM.bc_confirm)
+async def panel_broadcast_confirm(message: Message, state: FSMContext):
+    if not await _guard(message):
+        return
+    if not await _bc_guard(message):
+        await state.clear()
+        return
+    ok, text_or_err = sec.check_code(message.from_user.id, (message.text or "").strip())
+    if not ok:
+        await sec.record("broadcast_denied", message.from_user.id, f"کد تأیید: {text_or_err}")
+        return await send_home(message, f"❌ {text_or_err}\nدوباره کد را بفرستید یا /cancel",
+                               reply_markup=panel_kb())
     await state.clear()
-    users = await db.fetchall("SELECT id FROM users WHERE banned=0")
-    sent = 0
-    for row in users:
+    text = text_or_err
+    from adminbot.handlers.broadcast import send_broadcast
+    status = await send_home(message, "📣 در حال ارسال...\n0 ارسال شده")
+    try:
+        delay = int(float(await get_setting("broadcast_delay_ms", "60")))
+    except (TypeError, ValueError):
+        delay = 60
+
+    async def _tick(i: int) -> None:
         try:
-            await message.bot.send_message(row["id"], text)
-            sent += 1
+            await status.edit_text(f"📣 در حال ارسال...\n{fmt(i)} ارسال شده")
         except Exception:
-            continue
-    await send_home(message, f"📢 پیام همگانی برای {fmt(sent)} کاربر از {fmt(len(users))} ارسال شد.",
-                    reply_markup=panel_kb())
+            pass
+
+    sent, failed = await send_broadcast(message.bot, message.from_user.id, text,
+                                        progress=_tick, delay_ms=delay)
+    await db.execute(
+        "INSERT INTO admin_logs(admin_id, action, detail) VALUES(?, 'همگانی', ?)",
+        (message.from_user.id, f"ارسال به {sent} از {sent + failed} کاربر — «{text[:60]}»"))
+    await send_home(message, f"📢 پیام همگانی برای {fmt(sent)} کاربر ارسال شد "
+                             f"({fmt(failed)} ناموفق).", reply_markup=panel_kb())
+
+
+# ─── 🔐 امنیت ───
+
+SEC_LABELS = {
+    "broadcast_require_code": "🔐 کد تأیید برای پیام همگانی (۱=بله)",
+    "broadcast_max_per_hour": "⏳ سقف ارسال همگانی در ساعت (۰=بی‌سقف)",
+    "broadcast_max_recipients": "👥 سقف گیرنده در هر ارسال (۰=همه)",
+    "broadcast_delay_ms": "🐢 فاصلهٔ ارسال هر پیام (میلی‌ثانیه)",
+    "security_notify_fail_auth": "🔔 هشدار ورود ناموفق (۱=بله)",
+    "security_auto_lock_on_spam": "🔒 قفل خودکار هنگام اسپم (۱=بله)",
+    "security_alert_to": "📮 آیدی‌های هشدار (با کاما)",
+    "panel_password": "🔑 گذرواژهٔ پنل وب",
+    "webhook_secret": "🧩 کلید وبهوک",
+}
+
+
+async def security_text() -> str:
+    counts = await sec.counts_since(24)
+    lock_until = await get_setting("broadcast_lock_until", "")
+    locked = bool(lock_until) and not is_past(lock_until)
+    events = await sec.recent(limit=6)
+    lines = [
+        "🔐 <b>امنیت و دسترسی</b>",
+        "",
+        f"🎛 ارسال همگانی: {'🔒 قفل تا ' + lock_until if locked else '✅ باز'}",
+        f"🔑 ورود به پنل وب: {'فعال' if os.getenv('PANEL_PASSWORD') else 'ساخته می‌شود'}",
+        f"🧩 کلید وبهوک: {'✅ تنظیم است' if (os.getenv('WEBHOOK_SECRET') or cfg.WEBHOOK_SECRET) else '⚠️ تنظیم نشده'}",
+        "",
+        "<b>۲۴ ساعت اخیر:</b>",
+        sec.security_summary(counts),
+        "",
+        "<b>آخرین رخدادها:</b>",
+    ]
+    if not events:
+        lines.append("  —")
+    for e in events:
+        lines.append(f"  • {sec.KIND_TITLES.get(e['kind'], e['kind'])} — "
+                     f"{(e['detail'] or '')[:60]} <i>({e['created_at']})</i>")
+    return "\n".join(lines)
+
+
+def security_kb() -> object:
+    return kb([
+        [("🔒 قفل ارسال همگانی (۱ ساعت)", "p|seclock"), ("🔓 بازکردن قفل", "p|secopen")],
+        [("🧩 چرخاندن کلید وبهوک", "p|secrot"), ("🔑 گذرواژهٔ تازهٔ پنل", "p|secpwd")],
+        [("🔔 تست هشدار امنیتی", "p|secalert")],
+        [("⚙️ تنظیمات امنیتی", "p|secset")],
+        [("🔄 بروزرسانی", "p|sec")],
+        [("🏰 بازگشت به پنل", "p|home")],
+    ])
+
+
+@router.callback_query(F.data == "p|sec")
+async def panel_security(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    await call.answer()
+    await call.message.edit_text(await security_text(), reply_markup=security_kb())
+
+
+@router.callback_query(F.data == "p|seclock")
+async def panel_security_lock(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    until = await sec.lock_broadcast(60, f"قفل دستی توسط {call.from_user.id}")
+    await call.answer(f"🔒 تا {until} قفل شد", show_alert=True)
+    await call.message.edit_text(await security_text(), reply_markup=security_kb())
+
+
+@router.callback_query(F.data == "p|secopen")
+async def panel_security_unlock(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    await sec.unlock_broadcast()
+    await call.answer("🔓 قفل ارسال همگانی برداشته شد", show_alert=True)
+    await call.message.edit_text(await security_text(), reply_markup=security_kb())
+
+
+@router.callback_query(F.data == "p|secrot")
+async def panel_security_rotate(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    if not await is_super_admin(call.from_user.id):
+        return await call.answer("⛔️ فقط سوپرادمین", show_alert=True)
+    fresh = secrets.token_urlsafe(32)
+    await set_setting("webhook_secret", fresh)
+    cfg.WEBHOOK_SECRET = fresh
+    os.environ["WEBHOOK_SECRET"] = fresh
+    await sec.record("lock", call.from_user.id, "کلید وبهوک چرخانده شد")
+    await call.answer("✅ کلید تازه ساخته شد — وبهوک را دوباره ثبت کنید", show_alert=True)
+    await call.message.edit_text(await security_text(), reply_markup=security_kb())
+
+
+@router.callback_query(F.data == "p|secpwd")
+async def panel_security_password(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    if not await is_super_admin(call.from_user.id):
+        return await call.answer("⛔️ فقط سوپرادمین", show_alert=True)
+    pwd = await sec.set_panel_password("")
+    await sec.record("lock", call.from_user.id, "گذرواژهٔ پنل وب بازسازی شد")
+    await call.message.edit_text(
+        "🔑 <b>گذرواژهٔ تازهٔ پنل وب</b>\n\n"
+        f"<code>{pwd}</code>\n\n"
+        "این پیام را پاک کنید. برای ورود به پنل وب از همین گذرواژه استفاده کنید.",
+        reply_markup=security_kb())
+
+
+@router.callback_query(F.data == "p|secalert")
+async def panel_security_alert(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    await sec.alert(call.bot, f"تست هشدار — درخواست {call.from_user.full_name} "
+                              f"(<code>{call.from_user.id}</code>)")
+    await call.answer("🔔 هشدار برای سوپرادمین‌ها ارسال شد", show_alert=True)
+
+
+@router.callback_query(F.data == "p|secset")
+async def panel_security_settings(call: CallbackQuery):
+    if not await _guard(call):
+        return
+    rows = [[(f"{title} — {await get_setting(key, '')}", f"p|secval|{key}")]
+            for key, title in SEC_LABELS.items() if key not in ("panel_password", "webhook_secret")]
+    rows.append([("🏰 بازگشت به امنیت", "p|sec")])
+    await call.answer()
+    await call.message.edit_text(
+        "⚙️ <b>تنظیمات امنیتی</b>\n\nروی هر مورد بزنید و مقدار تازه را بفرستید:\n"
+        "• <code>۱</code> = روشن / <code>۰</code> = خاموش\n"
+        "• فاصلهٔ ارسال: ۳۰ تا ۱۰۰ میلی‌ثانیه امن است (کمتر = خطر محدودیت تلگرام)\n"
+        "• آیدی‌های هشدار را با کاما جدا کنید تا هشدارها به آن‌ها هم برسد.",
+        reply_markup=kb(rows))
+
+
+@router.callback_query(F.data.startswith("p|secval|"))
+async def panel_security_settings_pick(call: CallbackQuery, state: FSMContext):
+    if not await _guard(call):
+        return
+    key = call.data.split("|")[2]
+    if key not in SEC_LABELS:
+        return await call.answer("تنظیم نامعتبر", show_alert=True)
+    await state.set_state(PanelFSM.value)
+    await state.update_data(setting_key=key, back="p|secset")
+    await call.answer()
+    await call.message.edit_text(
+        f"⚙️ مقدار جدید برای «{SEC_LABELS[key]}»:\n"
+        f"مقدار فعلی: <b>{await get_setting(key, '—')}</b>\nبرای انصراف /cancel")
 
 
 # ─── تنظیمات سریع ───
@@ -535,12 +765,20 @@ async def panel_setting_save(message: Message, state: FSMContext):
     data = await state.get_data()
     key = data.get("setting_key", "")
     raw = (message.text or "").strip()
-    if key not in QUICK_SETTINGS or not raw:
+    if key not in QUICK_SETTINGS and key not in SEC_LABELS or not raw:
         await state.clear()
         return await send_home(message, "❌ مقدار نامعتبر است.", reply_markup=panel_kb())
+    if key in SEC_LABELS or key in QUICK_SETTINGS:
+        await sec.record("settings", message.from_user.id,
+                         f"{key}: {await get_setting(key, '—')} → {raw}")
     await set_setting(key, raw)
+    back = data.get("back", "")
     await state.clear()
-    await send_home(message, f"✅ «{QUICK_SETTINGS[key]}» به <b>{raw}</b> تغییر کرد.",
+    label = SEC_LABELS.get(key) or QUICK_SETTINGS[key]
+    if back == "p|secset":
+        await send_home(message, await security_text(), reply_markup=security_kb())
+        return
+    await send_home(message, f"✅ «{label}» به <b>{raw}</b> تغییر کرد.",
                     reply_markup=panel_kb())
 
 
@@ -714,6 +952,9 @@ async def panel_reset_execute(call: CallbackQuery):
     if not await is_super_admin(call.from_user.id):
         return await call.answer("⛔️ فقط سوپرادمین می‌تواند بازی را ریست کند.", show_alert=True)
     from core.fullreset import full_reset
+    # 🛡 ثبت قبل از اجرا (اگر لاگ نوشته نشود، ریست انجام نمی‌شود)
+    await sec.record("reset", call.from_user.id, "ریست کامل بازی از پنل داخل بازی")
+    await sec.alert(call.bot, f"🧨 ریست کامل بازی توسط <code>{call.from_user.id}</code> اجرا شد")
     await call.answer("⏳ در حال ریست کامل بازی…")
     try:
         await call.message.edit_text("⏳ <b>ریست کامل در حال انجام است…</b>\n"

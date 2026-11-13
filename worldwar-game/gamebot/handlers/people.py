@@ -229,8 +229,9 @@ async def buy_building_custom_input(message: Message, state: FSMContext):
         qty = int(message.text.strip())
     except (ValueError, TypeError):
         return await send_home(message, "❌ لطفاً یک عدد معتبر ارسال کنید.")
-    if qty <= 0 or qty > 500:
-        return await send_home(message, "❌ تعداد ساخت باید بین ۱ تا ۵۰۰ باشد.")
+    # 🔓 سقف ۵۰۰ حذف شد (به‌درخواست کاربر) — فقط سقف منطقی که از سرریز عدد جلوگیری کند
+    if qty <= 0 or qty > 1_000_000:
+        return await send_home(message, "❌ تعداد ساخت باید بین ۱ تا ۱٬۰۰۰٬۰۰۰ باشد.")
     data = await state.get_data()
     await state.clear()
     await execute_building_purchase(message, data["b_id"], qty)

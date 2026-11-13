@@ -24,6 +24,10 @@ async def run():
         "g|coinconv", "g|coinbuy", "g|daily", "g|guide", "g|sup", "g|suphist", "g|cchg",
         "g|stmt", "g|myflag", "g|flag_pick|0", "g|trust", "g|stats", "g|inc", "g|tax", "g|sub",
         "g|cur", "g|welfare", "g|ppl",
+        # 🧨 موتور واقع‌گرایی
+        "g|state", "g|sup", "g|supb|ammo", "g|unr", "g|econ", "g|elec", "g|intel",
+        "g|mkt", "g|refu", "g|fbase", "g|grid", "g|sea", "g|loan", "g|print",
+        "g|elcamp", "g|refures", "g|clsk",
     ]
     for data in callbacks:
         before = len(ERRORS)

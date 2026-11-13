@@ -369,6 +369,27 @@ CREATE TABLE IF NOT EXISTS nuclear_sites (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS nuclear_arsenal (
+  user_id INTEGER PRIMARY KEY,
+  bombs INTEGER DEFAULT 0,            -- ☢️ کلاهک هسته‌ای آمادهٔ استفاده
+  built_total INTEGER DEFAULT 0,      -- تعداد کل ساخته‌شده (آمار)
+  last_built_at TEXT,
+  last_used_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS nuclear_bombs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_id INTEGER,
+  name TEXT DEFAULT '',               -- نام دلخواه سلاح (مثل «فاتح هسته‌ای»)
+  yield_kt REAL DEFAULT 0,            -- قدرت (کیلوتن)
+  state TEXT DEFAULT 'ready',         -- ready | launched | spent | destroyed
+  built_at TEXT DEFAULT (datetime('now')),
+  used_at TEXT,
+  target_id INTEGER DEFAULT 0,
+  ready_at TEXT                       -- زمان تحویل کلاهک در حال ساخت (NULL = ساخته شده)
+);
+
 CREATE TABLE IF NOT EXISTS nuclear_strikes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   attacker_id INTEGER,
@@ -491,7 +512,8 @@ CREATE TABLE IF NOT EXISTS statements (
 
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
-  value TEXT DEFAULT ''
+  value TEXT DEFAULT '',
+  secret INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS admin_logs (
@@ -700,6 +722,120 @@ CREATE TABLE IF NOT EXISTS fb_queue (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- ═══ 🧨 موتور واقع‌گرایی (نسخهٔ ۹) ═══
+CREATE TABLE IF NOT EXISTS supply_stock (
+  user_id INTEGER PRIMARY KEY,
+  ammo REAL DEFAULT 0,
+  fuel REAL DEFAULT 0,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS strikes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  kind TEXT DEFAULT 'unrest',
+  severity REAL DEFAULT 0,
+  demand TEXT DEFAULT '',
+  started_at TEXT,
+  ends_at TEXT,
+  status TEXT DEFAULT 'active',
+  outcome TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS debts (
+  user_id INTEGER PRIMARY KEY,
+  principal INTEGER DEFAULT 0,
+  remaining INTEGER DEFAULT 0,
+  rate_percent REAL DEFAULT 2,
+  periods INTEGER DEFAULT 0,
+  taken_at TEXT,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS market (
+  key TEXT PRIMARY KEY,
+  name TEXT DEFAULT '',
+  price REAL DEFAULT 0,
+  prev_price REAL DEFAULT 0,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS market_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT DEFAULT '',
+  price REAL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS security_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT DEFAULT '',
+  user_id INTEGER DEFAULT 0,
+  ip TEXT DEFAULT '',
+  detail TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS security_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  to_user INTEGER DEFAULT 0,
+  text TEXT DEFAULT '',
+  sent INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS party_state (
+  user_id INTEGER PRIMARY KEY,
+  party TEXT DEFAULT 'industry',
+  support REAL DEFAULT 50,
+  campaign INTEGER DEFAULT 0,
+  next_at TEXT,
+  terms INTEGER DEFAULT 0,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS refugee_flows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_user INTEGER,
+  to_user INTEGER,
+  count INTEGER DEFAULT 0,
+  reason TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS intel_levels (
+  user_id INTEGER PRIMARY KEY,
+  value INTEGER DEFAULT 0,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS intel_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  attacker_id INTEGER,
+  defender_id INTEGER,
+  est_attack INTEGER DEFAULT 0,
+  est_defense INTEGER DEFAULT 0,
+  real_attack INTEGER DEFAULT 0,
+  real_defense INTEGER DEFAULT 0,
+  radius REAL DEFAULT 0,
+  accuracy INTEGER DEFAULT 0,
+  exposed INTEGER DEFAULT 0,
+  expires_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS season_weather (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  season_index INTEGER DEFAULT 0,
+  season TEXT DEFAULT 'spring',
+  started_at TEXT,
+  ends_at TEXT,
+  drought INTEGER DEFAULT 0,
+  storm INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_assets_user ON player_assets(user_id);
 CREATE INDEX IF NOT EXISTS idx_projects_user ON player_projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(status);
@@ -720,7 +856,8 @@ ALL_TABLES = [
     "strait_blockades", "rescue_campaigns", "rescue_donations", "oil_offers",
     "currency_requests", "fb_queue", "nuclear_sites", "nuclear_strikes",
     "internet_infra", "country_attrition", "ceasefire_offers", "arms_deals",
-    "sabotage_ops",
+    "sabotage_ops", "supply_stock", "strikes", "debts",
+    "market", "market_history", "season_weather", "intel_levels", "intel_reports", "refugee_flows", "party_state", "security_events", "security_alerts", "nuclear_arsenal", "nuclear_bombs",
 ]
 
 
@@ -761,6 +898,21 @@ MIGRATIONS = [
     ("revolutions", "force_block_until", "TEXT"),
     ("bases", "kind", "TEXT DEFAULT 'land'"),
     ("bases", "name", "TEXT DEFAULT ''"),
+    # 🧨 موتور واقع‌گرایی
+    ("users", "inflation", "REAL DEFAULT 0"),
+    ("states", "unrest", "REAL DEFAULT 0"),
+    ("states", "unrest_peak", "REAL DEFAULT 0"),
+    ("states", "strike_until", "TEXT"),
+    ("states", "strike_demand", "TEXT DEFAULT ''"),
+    ("states", "revolt_until", "TEXT"),
+    ("states", "supply_loss_until", "TEXT"),
+    ("states", "revolt_winner", "TEXT DEFAULT ''"),
+    ("states", "last_unrest_day", "TEXT DEFAULT ''"),
+    ("countries", "collapse_reason", "TEXT DEFAULT ''"),
+    ("countries", "collapse_at", "TEXT"),
+    ("season_weather", "ends_at", "TEXT"),
+    ("season_weather", "drought", "INTEGER DEFAULT 0"),
+    ("season_weather", "storm", "INTEGER DEFAULT 0"),
 ]
 
 
@@ -856,11 +1008,17 @@ async def get_initial_money() -> int:
     return value if value > 0 else INITIAL_MONEY
 
 
+# کلیدهایی که مقدارشان محرمانه است (کلید وبهوک، گذرواژهٔ پنل) و از نمای
+# عمومی جدول settings در پنل وب پنهان می‌شوند.
+SECRET_SETTING_KEYS = ("webhook_secret", "panel_password",
+                       "security_alert_to", "broadcast_lock_until")
+
+
 async def set_setting(key: str, value: str) -> None:
     await db.execute(
-        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "INSERT INTO settings(key, value, secret) VALUES(?, ?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (key, value),
+        (key, value, 1 if key in SECRET_SETTING_KEYS else 0),
     )
 
 
@@ -874,6 +1032,14 @@ async def init_db() -> None:
     # مهاجرت ستون‌های جدید (برای دیتابیس‌های قدیمی)
     for table, column, decl in MIGRATIONS:
         await _add_column(table, column, decl)
+    # ستون «محرمانه» در settings و علامت‌گذاری کلیدهای حساس (دیتابیس‌های قبلی)
+    await _add_column("settings", "secret", "INTEGER DEFAULT 0")
+    try:
+        marks = ",".join("?" for _ in SECRET_SETTING_KEYS)
+        await db.execute(f"UPDATE settings SET secret=1 WHERE key IN ({marks})",
+                         SECRET_SETTING_KEYS)
+    except Exception:
+        pass
 
     # داده‌های اولیه فقط وقتی جدول خالی است یا با UPDATE بدون حذف
     await seed.run(db)
@@ -1167,4 +1333,129 @@ DEFAULT_SETTINGS = {
     "season_required_votes": "10",
     # ── گزارش روزانه ادمین ──
     "daily_report_hour": "9",                # ساعت تهران
+    # ═══ 🧨 موتور واقع‌گرایی ═══
+    # ۱) 🚚 زنجیرهٔ تأمین و مهمات
+    "sec_supply": "1",                        # بخش تأمین روشن/خاموش
+    "supply_ammo_per_tick": "120",            # مهمات تولیدی هر دوره (پایه)
+    "supply_fuel_per_tick": "150",            # سوخت تولیدی هر دوره (پایه)
+    "supply_ammo_per_soldier": "2.5",         # مصرف مهمات به ازای هر یگان مهاجم
+    "supply_fuel_per_soldier": "3",           # مصرف سوخت به ازای هر یگان مهاجم
+    "supply_attack_penalty": "0.55",          # ضریب قدرت حمله با انبار خالی
+    "supply_penalty_cap": "45",               # حداکثر درصد افت (٪)
+    "supply_ration_per_soldier": "3",         # مصرف تدارکات روزانه هر سرباز
+    "supply_unfed_penalty": "0.35",           # سهم افت قدرت با انبار خالی در گوش‌به‌زنگ
+    "supply_sabotage_pct": "0.08",            # سهم انبار که هر خرابکاری صنعتی می‌سوزاند
+    "supply_buy_price": "60000",              # قیمت هر واحد مهمات در بازار داخلی
+    "supply_fuel_price": "50000",             # قیمت هر واحد سوخت داخلی
+    # ۲) ✊ اعتصاب و اعتراض خیابانی
+    "sec_unrest": "1",
+    "unrest_decay_per_period": "4",           # بازیابی خودکار هر دورهٔ درآمد (امتیاز)
+    "unrest_strike_threshold": "65",          # آستانهٔ اعتصاب سراسری
+    "unrest_strike_minutes": "120",           # مدت اعتصاب (دقیقه)
+    "unrest_strike_income_penalty": "0.5",    # ضریب درآمد در اعتصاب
+    "unrest_subsidy_step": "15",              # هر بستهٔ یارانه چند امتیاز کم می‌کند
+    "unrest_subsidy_cost_m": "40",            # هزینهٔ هر بسته (میلیون)
+    "unrest_crackdown_gain": "22",            # کاهش ناآرامی با سرکوب نظامی
+    "unrest_crackdown_sat": "6",              # افت رضایت با سرکوب
+    "unrest_crackdown_loss_pct": "0.06",      # سهم سربازان ازدست‌رفته در سرکوب
+    "unrest_ignore_gain": "12",               # کاهش ناآرامی با نادیده‌گرفتن
+    "unrest_ignore_sat": "9",                 # افت رضایت با نادیده‌گرفتن
+    "unrest_rise_per_miss": "22",             # افزایش ناآرامی بابت هر دورهٔ بی‌اعتنایی
+    "unrest_strike_fail_penalty": "18",       # افت رضایت با شکست مذاکره
+    # ۳) ✊ شورش و جنگ داخلی
+    "sec_revolt": "1",
+    "revolt_threshold": "90",                 # آستانهٔ شروع جنگ داخلی
+    "revolt_minutes": "90",                   # مدت مهار شورش
+    "revolt_income_penalty": "0.35",          # ضریب درآمد در جنگ داخلی
+    "revolt_negotiate_cost_m": "150",         # هزینهٔ امتیازدهی به شورشی‌ها (میلیون)
+    "revolt_negotiate_gain": "35",            # کاهش شدت با امتیازدهی
+    "revolt_bribe_cost_m": "300",             # هزینهٔ نفوذ و خریدن فرماندهان (میلیون)
+    "revolt_bribe_chance": "60",              # شانس موفقیت رشوه (٪)
+    "revolt_bribe_gain": "40",                # کاهش شدت در صورت موفقیت رشوه
+    "revolt_crush_loss_pct": "0.18",          # سهم سربازان ازدست‌رفته در سرکوب
+    "revolt_rival_share": "0.10",             # سهم دارایی‌ها به شورشی‌ها
+    "revolt_rival_money_pct": "0.25",         # سهم خزانه به شورشی‌ها
+    # ۶) 🗳 انتخابات دوره‌ای و احزاب
+    "sec_elections": "1",
+    "election_interval_hours": "48",          # فاصلهٔ انتخابات‌های دوره‌ای
+    "election_campaign_cost_m": "25",         # هزینهٔ هر رأی تبلیغاتی (میلیون)
+    "election_bonus_step": "0.35",            # اثر هر رأی تبلیغاتی
+    "election_opposition_threshold": "55",    # از این درصد، اپوزیسیون برنده می‌شود
+    "election_party_income_bonus": "0.05",    # پاداش حزب حاکم بر درآمد
+    # ۴) 🕵 جاسوسی و مه اطلاعات
+    "sec_intel": "1",
+    "intel_cost_m": "12",                     # هزینهٔ هر عملیات جاسوسی (میلیون)
+    "intel_radius_base": "0.35",              # پهنای بازهٔ برآورد (پایه)
+    "intel_radius_step": "0.05",              # کاهش پهنای بازه به ازای هر سطح
+    "intel_max_level": "5",                   # سقف سطح شبکهٔ اطلاعاتی
+    "intel_expose_chance": "25",              # شانس لو رفتن جاسوس (٪)
+    "intel_expire_hours": "12",               # اعتبار گزارش جاسوسی (ساعت)
+    # ۷) 🛢 بازار جهانی نفت
+    "sec_oil_market": "1",
+    "oil_market_base_usd": "80",              # قیمت پایهٔ هر بشکه (دلار)
+    "oil_market_shock_war_pct": "12",         # جهش قیمت با هر جنگ تمام‌عیار
+    "oil_market_shock_blockade_pct": "18",    # جهش قیمت با بسته‌شدن هر تنگه
+    "oil_market_drift_pct": "3",              # نوسان تصادفی بازار (٪)
+    "oil_market_min_usd": "35",               # کف قیمت
+    "oil_market_max_usd": "180",              # سقف قیمت
+    "oil_market_income_weight": "0.75",       # وزن اثر قیمت روی درآمد نفتی
+    # ۵) 🏃 پناهندگان و فرار مغزها
+    "sec_refugees": "1",
+    "refugee_pct_per_province": "0.05",       # سهم جمعیت هر استان اشغال‌شده
+    "refugee_pct_per_hit": "0.02",            # سهم جمعیت هر قطعی/بمباران
+    "refugee_return_cost_m": "10",            # هزینهٔ اسکان هر ۱۰۰۰ پناهنده (میلیون)
+    "refugee_satisfaction_hit": "1.5",        # افت رضایت میزبان با پذیرش
+    # ۸) 📡 پایگاه نظامی خارجی
+    "sec_foreign_base": "1",
+    "fbase_pay_m": "60",                      # درآمد میزبان از هر پایگاه (میلیون بر دوره)
+    "fbase_defense_bonus_pct": "20",          # بونوس دفاعی میزبان از حضور مهمان
+    "fbase_tech_bonus_pct": "5",              # بونوس قدرت مهمان از حضور در پایگاه
+    "fbase_crisis_sat": "10",                 # افت رضایت میزبان با لغو پایگاه
+    "fbase_crisis_diplomacy": "15",           # افت روابط عمومی میزبان با لغو
+    "fbase_auto_join": "1",                   # ورود خودکار مهمان به جنگ میزبان
+    # ۹) ⚡ حملهٔ سایبری با اثر آبشاری
+    "sec_grideffect": "1",
+    "grid_hours_per_success": "6",            # قطعی برق به ازای هر خرابکاری موفق
+    "grid_max_hours": "24",
+    "grid_income_penalty_pct": "6",           # افت درآمد به ازای هر ساعت قطعی (٪)
+    "grid_repair_cost_m_per_hour": "12",      # هزینهٔ خاموش‌نماندن (ترمیم اضطراری)
+    "grid_satisfaction_hit": "1.2",           # افت رضایت به ازای هر ساعت
+    # ۱۰) 🍁 فصل‌ها و آب‌وهوا
+    "sec_weather": "1",
+    "weather_season_hours": "24",             # طول هر فصل در بازی
+    "weather_winter_attack_pct": "12",        # کندی عملیات در زمستان (٪)
+    "weather_winter_energy_pct": "18",        # مصرف بیشتر انرژی در زمستان (٪)
+    "weather_summer_water_pct": "15",         # افت آب در تابستان (٪)
+    "weather_drought_chance": "20",           # شانس خشکسالی در تابستان (٪)
+    "weather_storm_chance": "15",             # شانس طوفان در پاییز (٪)
+    "weather_storm_attack_pct": "10",         # کندی حمله در طوفان (٪)
+    "weather_harvest_bonus_m": "25",          # بونوس برداشت در پاییز (میلیون)
+    # ═══ ☢️ سلاح هسته‌ای (کلاهک) ═══
+    "nuke_bomb_cost_m": "1800",              # هزینهٔ ساخت هر کلاهک (میلیون)
+    "nuke_bomb_materials": "40000",          # مصالح لازم هر کلاهک
+    "nuke_bomb_coins": "25",                 # سکه شاهی هر کلاهک
+    "nuke_bomb_minutes": "30",               # زمان ساخت هر کلاهک (دقیقه)
+    "nuke_bomb_yield_kt": "150",             # قدرت هر کلاهک (کیلوتن)
+    "nuke_bomb_limit": "8",                  # حداکثر کلاهک در زرادخانه
+    "nuke_strike_cooldown_hours": "12",      # فاصلهٔ لازم بین دو حملهٔ هسته‌ای
+    "nuke_blast_provinces": "40",            # درصد احتمال جدا شدن هر استان
+    "nuke_blast_max_provinces": "2",         # حداکثر استان جداشده در یک حمله
+    "nuke_blast_loot_percent": "25",         # درصد غارت خزانهٔ هدف
+    "nuke_blast_wear": "35",                 # فرسایش اضافه‌شده به کشور هدف
+    "nuke_blast_satisfaction": "45",         # افت رضایت کشور هدف
+    "nuke_blast_civilian": "900000",         # تلفات غیرنظامی تخمینی (نفر)
+    "nuke_fallout_self": "6",                # افت رضایت خود مهاجم (جهانی محکوم می‌شود)
+    "nuke_catastrophe_chance": "6",          # احتمال تبدیل به فاجعهٔ انسانی (کلاهک منفجر نمی‌شود؟)
+    "battle_reserve_loss_percent": "2",     # 🎯 فرسایش ذخیره‌گاه در نبرد (٪)
+    "battle_defender_kill_ratio": "1.5",    # 🎯 سقف تلفات مدافع به ازای هر یگان مهاجم
+    "nuke_global_condemn": "1",              # ۱ = همهٔ کشورها هزینهٔ سیاسی می‌دهند
+    # ═══ 🛡 امنیت عملیاتی ═══
+    "security_alert_to": "",                   # آیدی‌های هشدار امنیتی (با کاما)
+    "broadcast_lock_until": "",                 # اگر پر باشد، پیام همگانی قفل است
+    "broadcast_require_code": "1",              # ۱ = کد تأیید ۴رقمی لازم است
+    "broadcast_max_per_hour": "1",              # حداکثر ارسال همگانی در ساعت
+    "broadcast_max_recipients": "0",            # ۰ = بی‌سقف؛ وگرنه سقف گیرنده در هر ارسال
+    "broadcast_delay_ms": "60",                 # فاصلهٔ ارسال هر پیام (ضد محدودیت تلگرام)
+    "security_notify_fail_auth": "1",           # هشدار هنگام تلاش ناموفق ورود
+    "security_auto_lock_on_spam": "1",          # قفل خودکار همگانی با تکرار مشکوک
 }

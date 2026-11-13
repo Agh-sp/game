@@ -165,9 +165,23 @@ async def main():
     await send_text(dp, bot, SUPER1, str(PLAYER))
     H.SENT.clear()
     await dp.feed_update(bot, H.cb_update(SUPER1, "p|bc"))
+    texts = [t for (_n, _c, t, _p) in H.SENT if t]
+    H.check(any("متن پیام همگانی" in (t or "") for t in texts), "جریان پیام همگانی باز شد")
+    # 🛡 امنیت: ارسال فقط با کد تأیید انجام می‌شود
+    H.SENT.clear()
     await send_text(dp, bot, SUPER1, "📣 پیام آزمایشی")
     texts = [t for (_n, _c, t, _p) in H.SENT if t]
-    H.check(any("پیام همگانی" in (t or "") for t in texts), "پیام همگانی ارسال شد")
+    H.check(any("کد تأیید" in (t or "") for t in texts), "کد تأیید برای همگانی درخواست شد")
+    from core import security as sec
+    from core.db import set_setting
+    import adminbot.tools as _tools
+    _tools._game_bot = bot          # ارسال همگانی در تست از ربات جعلی
+    code = sec.make_code(SUPER1, "📣 پیام آزمایشی")
+    await send_text(dp, bot, SUPER1, code)
+    H.check(any(c == PLAYER for (_n, c, _t, _p) in H.SENT),
+            "پیام همگانی پس از تأیید برای بازیکن ارسال شد")
+    await set_setting("broadcast_max_per_hour", "5")
+    sec.reset_rate()
 
     print("\n== TEST 9: نمایش لاگ‌ها (فقط فیش و کاربر) و مدیریت ادمین‌ها ==")
     # یک لاگ دستی «کاربر» و یک لاگ غیرمجاز بسازیم

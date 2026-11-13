@@ -45,9 +45,14 @@ def create_dispatcher() -> Dispatcher:
     dp.startup.register(_on_startup)
     from gamebot.handlers import (start, adminpanel, menu, people, projects, army, gov, war,
                                   un, misc, trade, oil, rescue, politics, materials, world,
-                                  resources, arms, sabotage)
+                                  resources, arms, sabotage, state)
+
+    from gamebot.middleware import IntegrityMiddleware
+    # 🔒 نگهبان یکپارچگی: آپدیت‌های غیرممکن/جعلی (از طرف ربات دیگر، بدون کاربر و …)
+    # قبل از هر هندلری رد می‌شوند.
+    dp.update.outer_middleware(IntegrityMiddleware())
     for r in (start, adminpanel, menu, people, projects, army, gov, politics, war, un, misc,
-              trade, oil, rescue, materials, resources, arms, sabotage, world):
+              trade, oil, rescue, materials, resources, arms, sabotage, world, state):
         dp.include_router(r.router)
     # روتر گفتگوی مذاکره باید آخرین باشد تا FSMهای دیگر اولویت داشته باشند
     dp.include_router(trade.neg_router)

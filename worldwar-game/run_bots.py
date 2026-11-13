@@ -45,6 +45,7 @@ log = logging.getLogger("bots")
 
 PID_FILE = os.getenv("BOT_PID_FILE", "/tmp/wwgame_bots.pid")
 stop_event = asyncio.Event()
+FAILS: dict[str, int] = {}
 
 
 async def poll_with_retry(dp: Dispatcher, bot: Bot, name: str) -> None:
@@ -62,7 +63,15 @@ async def poll_with_retry(dp: Dispatcher, bot: Bot, name: str) -> None:
         except Exception as e:  # noqa: BLE001
             if stop_event.is_set():
                 break
+            FAILS[name] = FAILS.get(name, 0) + 1
             log.error("خطا در %s: %s — تلاش مجدد تا ۵ ثانیه دیگر...", name, e)
+            if FAILS[name] == 3:
+                log.error(
+                    "🚫 %s سه بار نتوانست به api.telegram.org وصل شود.\n"
+                    "   اگر «urllib» وصل می‌شود ولی این خطا تکرار می‌شود، فایروال یا "
+                    "پروکسی شبکه جلوی TLS را گرفته است.\n"
+                    "   راه‌حل:  python3 run_webhook.py  یا  python3 paw_start.py  "
+                    "(حالت وبهوک، بدون اتصال خروجی)", name)
             try:
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
@@ -87,6 +96,15 @@ def _remove_pid() -> None:
 
 async def run() -> None:
     log.info("🧹 %d پوشهٔ بایت‌کد کهنه پاک شد (اجرای کد تازه)", _PURGED)
+
+    # 🌐 عیب‌یابی خودکار مسیر شبکه (پروکسی/مستقیم/SSL) پیش از ساخت ربات‌ها
+    if (os.getenv("NET_AUTOFIX", "1") or "1").strip() not in ("0", "false", "off"):
+        try:
+            from core import netdiag
+            await netdiag.setup()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("عیب‌یابی شبکه انجام نشد: %s", exc)
+
     await init_db()
     _write_pid()
     from core.keepalive import start_keepalive
@@ -98,7 +116,8 @@ async def run() -> None:
 
     if GAME_BOT_TOKEN:
         from gamebot.main import create_dispatcher as create_game_dp
-        game_bot = Bot(GAME_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        from core.netdiag import make_bot
+        game_bot = make_bot(GAME_BOT_TOKEN)
         game_dp = create_game_dp()
         bots.append(game_bot)
         dps.append(game_dp)
@@ -108,7 +127,8 @@ async def run() -> None:
 
     if ADMIN_BOT_TOKEN:
         from adminbot.main import create_dispatcher as create_admin_dp
-        admin_bot = Bot(ADMIN_BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        from core.netdiag import make_bot
+        admin_bot = make_bot(ADMIN_BOT_TOKEN)
         admin_dp = create_admin_dp()
         bots.append(admin_bot)
         dps.append(admin_dp)

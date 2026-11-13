@@ -102,6 +102,61 @@ async def income_tick(bot) -> None:
             (uid,))
 
         net = tax_amt + oil_amt + strait_amt + res_amt - subsidy_slice - blockade_loss
+
+        # ═══ 🧨 موتور واقع‌گرایی: تیک‌های هر دوره ═══
+        economy_lines: list[str] = []
+        try:
+            from core import supply as supply_mod
+            await supply_mod.tick(uid)                     # تولید مهمات/سوخت
+            ration = await supply_mod.ration_tick(uid)     # تدارکات ارتش
+            economy_lines.extend(ration.get("lines") or [])
+        except Exception:
+            log.exception("supply tick failed")
+        try:
+            from core import bases as bases_mod
+            pay = await bases_mod.income_tick(uid)         # درآمد پایگاه خارجی
+            if pay:
+                economy_lines.append(f"📡 درآمد پایگاه خارجی: <b>{fmt_money(pay)}</b>")
+        except Exception:
+            log.exception("foreign base income failed")
+        try:
+            from core import market as market_mod
+            inst = await market_mod.installment_tick(uid)  # قسط بدهی
+            economy_lines.extend(inst.get("lines") or [])
+            await market_mod.inflation_decay_tick(uid)     # فروکش تورم
+        except Exception:
+            log.exception("market tick failed")
+        try:
+            from core import unrest as unrest_mod
+            u = await unrest_mod.decay_tick(uid)           # ناآرامی ← اعتصاب
+            if u.get("strike_started"):
+                economy_lines.append(
+                    f"✊ <b>{unrest_mod.STRIKE_NAMES.get(u.get('kind'), 'اعتصاب سراسری')}</b> "
+                    f"آغاز شد (ناآرامی {u['unrest']}٪) — درآمد کشور نصف شد. "
+                    "از «✊ ناآرامی و اعتصاب» تصمیم بگیرید.")
+            await unrest_mod.maybe_start_revolt(bot, uid)  # شورش/جنگ داخلی
+        except Exception:
+            log.exception("unrest tick failed")
+        try:
+            from core import grid as grid_mod
+            await grid_mod.decay_tick(uid)                 # تعمیر تدریجی شبکه
+        except Exception:
+            pass
+        try:
+            from core import weather as weather_mod
+            economy_lines.extend(await weather_mod.tick_country(uid))
+        except Exception:
+            log.exception("weather tick failed")
+        try:
+            from core import refugees as ref_mod
+            fl = await ref_mod.flight_tick(uid)
+            if fl.get("fled"):
+                extra = fl.get("lines") or []
+                economy_lines.append(extra[0] if extra
+                                     else f"🏃 {fmt(fl['fled'])} نفر مهاجرت کردند.")
+        except Exception:
+            log.exception("refugee tick failed")
+
         if net:
             await db.execute("UPDATE users SET money=money+? WHERE id=?", (net, uid))
         await db.execute("UPDATE states SET last_income=? WHERE user_id=?", (iso(), uid))
@@ -125,6 +180,8 @@ async def income_tick(bot) -> None:
                     f"<b>-{fmt_money(blockade_loss)}</b>\n")
         if extracted:
             msg += f"🛢 نفت استخراج‌شده: <b>{fmt(extracted)} بشکه</b>\n"
+        if economy_lines:
+            msg += "\n" + "\n".join(economy_lines) + "\n"
         if res_txt:
             names = {"power": "برق", "water": "آب", "gas": "گاز"}
             msg += "🏭 مازاد به انبار رفت: " + "، ".join(
@@ -141,6 +198,14 @@ async def income_tick(bot) -> None:
 
 
 # ─── رای‌گیری سیزن ───
+
+
+async def enrich_settle_task(bot) -> None:
+    """☢️ تکمیل مراحل غنی‌سازی و تحویل کلاهک‌های آماده (برای زمان‌بندهای بیرونی)."""
+    from core import nuke as nuke_mod
+    from core.enrichment import settle_all
+    await settle_all(bot)
+    await nuke_mod.settle_all(bot)
 
 
 async def season_votes_task(bot) -> None:
@@ -370,6 +435,15 @@ async def _slow_loop(bot) -> None:
             await settle_all(bot)
         except Exception:
             log.exception("enrichment settle failed")
+        # ☢️ (نگاه کنید به enrich_settle_task و nuke.settle_all)
+        # ☢️ تحویل کلاهک‌های هسته‌ای که ساختشان تمام شده
+        try:
+            from core import nuke as nuke_mod
+            made = await nuke_mod.settle_all(bot)
+            if made:
+                log.info("☢️ %s کلاهک هسته‌ای آماده شد", made)
+        except Exception:
+            log.exception("nuke settle failed")
         # بستن انقلاب‌هایی که مهلتشان تمام شده
         try:
             from core.politics import revolution_tick
@@ -378,6 +452,32 @@ async def _slow_loop(bot) -> None:
                 log.info("🔥 %s انقلاب به پایان رسید", closed)
         except Exception:
             log.exception("revolution tick failed")
+        # 🔥 جنگ داخلی: مهلت تمام‌شده = پیروزی شورشی‌ها
+        try:
+            from core.unrest import revolt_tick
+            done = await revolt_tick(bot)
+            if done:
+                log.info("🔥 %s جنگ داخلی به پایان رسید", done)
+        except Exception:
+            log.exception("revolt tick failed")
+        # 🛢 بازار جهانی نفت
+        try:
+            from core.market import oil_tick
+            await oil_tick(bot)
+        except Exception:
+            log.exception("oil market tick failed")
+        # 🍁 فصل‌ها و آب‌وهوا
+        try:
+            from core.weather import tick as weather_tick
+            await weather_tick(bot)
+        except Exception:
+            log.exception("weather tick failed")
+        # 🗳 انتخابات دوره‌ای و احزاب
+        try:
+            from core.elections import tick as elections_tick
+            await elections_tick(bot)
+        except Exception:
+            log.exception("elections tick failed")
         await asyncio.sleep(60)
 
 

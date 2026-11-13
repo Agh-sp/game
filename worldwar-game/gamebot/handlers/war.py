@@ -1,4 +1,5 @@
 """اتاق جنگ: اعلان جنگ (با/بدون مجوز)، حمله (۶ نوع) و عملیات سایبری."""
+import logging
 import random
 
 from aiogram import F, Router
@@ -13,6 +14,8 @@ from core.economy import (announce, army_power, bump_progress, get_country,
 from core.utils import (fmt, fmt_money, add_hours, iso, hours_left, hours_ago, fmt_hm,
                         jloads, clamp)
 from gamebot.common import back_row, blocked_banner, kb, send_home, dm
+
+log = logging.getLogger("gamebot.war")
 
 router = Router()
 
@@ -128,7 +131,8 @@ async def war_room(call: CallbackQuery):
     await call.message.edit_text(text, reply_markup=kb([
         [("📢 اعلان جنگ", "g|wdec")],
         [("🗡 حمله (عادی / تسخیر)", "g|watk")],
-        [("☢️ هدف قرار دادن تأسیسات هسته‌ای", "g|nuk")],
+        [("☢️ تأسیسات هسته‌ای دشمن (حملهٔ موشکی)", "g|nuk")],
+        [("💣 زرادخانهٔ اتمی من (ساخت/شلیک)", "g|nuke")],
         [("🎯 خرابکاری در هر سازهٔ دشمن", "g|sab")],
         [("🕶 سایبری", "g|wcyb")],
         [("🕊 آتش‌بس و صلح", "g|cease")],
@@ -396,6 +400,13 @@ def _is_missile(e: dict) -> bool:
             or "موشک" in name or "راکت" in name or "هایمارس" in name)
 
 
+def _is_air_defense(e: dict) -> bool:
+    """آیا این تجهیز یک سامانهٔ پدافندی است؟ (پدافند موشک شلیک نمی‌کند)"""
+    name = e.get("name") or ""
+    return ((e.get("subcategory") or "").lower() == "air_defense"
+            or "پدافند" in name or "پاتریوت" in name or "اس ۴۰۰" in name or "تور ام" in name)
+
+
 async def _attack_options(user_id: int, defender_id: int) -> tuple[dict, dict]:
     """بررسی قواعد هر نوع حمله؛ خروجی: (dict وضعیت، dict توضیح)."""
     d_country = await get_country(defender_id)
@@ -415,7 +426,13 @@ async def _attack_options(user_id: int, defender_id: int) -> tuple[dict, dict]:
     base_near = any(b["region"] == d_country["region"] for b in bases) if d_country else False
     same_region = bool(a_country and d_country and a_country["region"] == d_country["region"])
 
-    sea_ok = bool(d_country and d_country["has_sea"] == 1 and has("sea"))
+    # ⚓ نبرد دریایی: هر یگان دریایی یا ضدکشتی کافی است (زیردریایی/قایق/ناو) و
+    # موشک ضدکشتی هم می‌تواند از ساحل ناوگان دشمن را بزند.
+    has_naval = has("sea") or any((e.get("subcategory") or "").lower() == "submarine"
+                                  for e in my_equipment)
+    antiship = any((e.get("subcategory") or "").lower() in ("antiship", "cruise")
+                   or "ضدکشتی" in (e.get("name") or "") for e in my_equipment)
+    sea_ok = bool(d_country and d_country["has_sea"] == 1 and (has_naval or antiship))
     air_ok = bool(d_country and has("air") and (has_carrier or base_near or same_region))
     land_ok = bool(d_country and (same_region or base_near) and (has("land") or has_soldiers))
     missile_ok = bool(d_country and has_missile)
@@ -518,7 +535,13 @@ async def _equip_picker(call, state: FSMContext, allowed_cats: list, as_message:
         "WHERE a.user_id=? AND a.item_type='equipment' AND a.quantity>0 AND c.key IN (%s) "
         "ORDER BY c.id, e.id" % placeholders, (call.from_user.id, *allowed_cats))
     if atype == "missile":
-        my_equipment = [e for e in my_equipment if _is_missile(e)]
+        my_equipment = [e for e in my_equipment if _is_missile(e) and not _is_air_defense(e)]
+    elif atype == "sea":
+        # 🚀 موشک ضدکشتی/کروز هم از ساحل قابل استفاده است
+        extra = [e for e in await _my_equipment(call.from_user.id)
+                 if _is_missile(e) and not _is_air_defense(e)
+                 and e["id"] not in {x["id"] for x in my_equipment}]
+        my_equipment += extra
     elif atype == "land":
         # راکت‌اندازها هم در حمله زمینی قابل استفاده‌اند
         extra = [e for e in await _my_equipment(call.from_user.id)
@@ -692,6 +715,29 @@ async def attack_confirm(call: CallbackQuery, state: FSMContext):
         (call.from_user.id,))
     if soldiers and soldiers["c"]:
         lines.append(f"  🪖 {fmt(soldiers['c'])} سرباز")
+    # 🚚 تدارکات لازم و 🕵 مه اطلاعات (پیش‌بینی بازه‌ای، نه عدد قطعی)
+    try:
+        from core import supply as supply_mod
+        units = sum(int(v) for v in plan.values()) + int((soldiers or {}).get("c") or 0)
+        need = await supply_mod.need_for_attack(call.from_user.id, units)
+        st = await supply_mod.get(call.from_user.id)
+        lines.append(f"\n🚚 <b>تدارکات لازم:</b> {fmt(need['ammo'])} مهمات + "
+                     f"{fmt(need['fuel'])} سوخت")
+        lines.append(f"   انبار شما: {fmt(st['ammo'])} مهمات | {fmt(st['fuel'])} سوخت "
+                     f"(اثر قدرت ×{await supply_mod.factor(call.from_user.id)})")
+    except Exception:
+        log.exception("supply preview failed")
+    try:
+        from core import intel as intel_mod
+        lines.append("\n" + await intel_mod.battle_preview(call.from_user.id, war["defender_id"]))
+    except Exception:
+        log.exception("intel preview failed")
+    try:
+        from core import weather as weather_mod
+        if await weather_mod.attack_multiplier() != 1.0:
+            lines.append("\n" + await weather_mod.season_line())
+    except Exception:
+        pass
     lines.append("\nآیا مطمئن هستید؟")
     await call.answer()
     await call.message.edit_text("\n".join(lines), reply_markup=kb([
@@ -724,6 +770,7 @@ async def attack_go(call: CallbackQuery, state: FSMContext):
 
 async def resolve_battle(call, war: dict, plan: dict, atype: str):
     from core import attrition as attr
+    from core import combat
     attacker_id, defender_id = war["attacker_id"], war["defender_id"]
     # ⚔️ «حمله به قصد تسخیر» یک حالت است نه یک نوع نیرو: نیروهای انتخاب‌شده
     # تعیین می‌کنند نبرد از چه طریقی انجام شود.
@@ -736,6 +783,33 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     if not a_country or not d_country:
         return await call.answer("❌ کشور مهاجم یا مدافع یافت نشد", show_alert=True)
     plan = {str(k): int(v) for k, v in (plan or {}).items() if int(v) > 0}
+
+    # 🛡 اعتبارسنجی نیروی اعزامی: هیچ‌کس نمی‌تواند بیش از دارایی واقعی‌اش بفرستد
+    # (اگر بین انتخاب نیرو و تأیید، تجهیزات فروخته/نابود شده باشد هم اصلاح می‌شود).
+    if plan:
+        owned = {int(r["item_id"]): int(r["quantity"] or 0) for r in await db.fetchall(
+            "SELECT item_id, quantity FROM player_assets "
+            "WHERE user_id=? AND item_type='equipment'", (attacker_id,))}
+        fixed: dict[str, int] = {}
+        dropped: list[str] = []
+        for eid, qty in plan.items():
+            have = owned.get(int(eid), 0)
+            if have <= 0:
+                dropped.append(eid)
+                continue
+            fixed[eid] = min(int(qty), have)
+        if dropped:
+            log.warning("plan included unowned equipment %s from %s", dropped, attacker_id)
+        plan = fixed
+        if not plan and not dropped:
+            return await call.answer("❌ نیرویی برای حمله ندارید", show_alert=True)
+    fronts = combat.FRONT_CATS.get(atype, combat.FRONT_CATS["mixed"])
+    if not plan:
+        soldiers_only = await db.fetchone(
+            "SELECT COALESCE(SUM(quantity),0) c FROM player_assets "
+            "WHERE user_id=? AND item_type='soldier'", (attacker_id,))
+        if not int((soldiers_only or {}).get("c") or 0):
+            return await call.answer("❌ نیرویی برای حمله انتخاب نشده است", show_alert=True)
 
     # قدرت مهاجم
     atk_power = 0.0
@@ -759,9 +833,15 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     # قدرت مدافع
     d_def = 0.0
     for e in await db.fetchall(
-            "SELECT e.*, a.quantity FROM player_assets a JOIN equipment e ON e.id=a.item_id "
+            "SELECT e.*, a.quantity, c.key AS cat_key FROM player_assets a "
+            "JOIN equipment e ON e.id=a.item_id "
+            "LEFT JOIN equipment_categories c ON c.id=e.category_id "
             "WHERE a.user_id=? AND a.item_type='equipment'", (defender_id,)):
-        d_def += (e["defense_power"] or 0) * e["quantity"]
+        # ⚓ در نبرد دریایی ناوها تمام توان دفاعی دارند و نیروی زمینی فقط
+        # پشتیبانی ساحلی است (۲۵٪) — و برعکس. قبلاً تانک‌ها با توان کامل
+        # در جنگ دریایی دفاع می‌کردند و نبردها بی‌معنا می‌شدند.
+        weight = 1.0 if (e.get("cat_key") or "") in fronts else 0.25
+        d_def += (e["defense_power"] or 0) * e["quantity"] * weight
     for s in await db.fetchall(
             "SELECT s.power, a.quantity FROM player_assets a JOIN soldier_types s ON s.id=a.item_id "
             "WHERE a.user_id=? AND a.item_type='soldier'", (defender_id,)):
@@ -786,7 +866,9 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     # محاسبه سامانه‌های پدافندی و موشکی مدافع
     def_air_defense_power = 0.0
     def_equipment_list = await db.fetchall(
-        "SELECT e.*, a.quantity FROM player_assets a JOIN equipment e ON e.id=a.item_id "
+        "SELECT e.*, a.quantity, c.key AS cat_key FROM player_assets a "
+        "JOIN equipment e ON e.id=a.item_id "
+        "LEFT JOIN equipment_categories c ON c.id=e.category_id "
         "WHERE a.user_id=? AND a.item_type='equipment' AND a.quantity>0", (defender_id,))
     for e in def_equipment_list:
         subcat = (e.get("subcategory") or "").lower()
@@ -797,12 +879,11 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     # بررسی تسلیحات موشکی و پرتابه‌های مهاجم
     missile_power = 0.0
     for eid, qty in plan.items():
-        e = await db.fetchone("SELECT * FROM equipment WHERE id=?", (int(eid),))
-        if e:
-            ename = e.get("name") or ""
-            subcat = (e.get("subcategory") or "").lower()
-            if "موشک" in ename or "راکت" in ename or subcat in ("artillery", "space_weapon") or "هایمارس" in ename:
-                missile_power += qty * (e["attack_power"] or 0)
+        e = await db.fetchone(
+            "SELECT e.*, c.key AS cat_key FROM equipment e "
+            "LEFT JOIN equipment_categories c ON c.id=e.category_id WHERE e.id=?", (int(eid),))
+        if e and _is_missile(e) and not _is_air_defense(e):
+            missile_power += qty * (e["attack_power"] or 0)
 
     # سیستم رهگیری موشکی توسط سامانه‌های پدافندی (پاتریوت، اس ۴۰۰، تور ام۱)
     intercepted_missiles = False
@@ -815,7 +896,6 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         intercepted_missiles = True
 
     # ─── استراتژی حمله بر اساس ترکیب واقعی نیروها ───
-    from core import combat
     comp: dict = {}
     for eid, qty in plan.items():
         e = await db.fetchone(
@@ -843,9 +923,52 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
     if wear_before > 0:
         atk_power *= 1.0 + (wear_before / 100.0) * 0.25
 
+    # 🚚 زنجیرهٔ تأمین: مهمات و سوخت این عملیات از انبار کسر می‌شود
+    extra_supply_lines: list[str] = []
+    try:
+        from core import supply as supply_mod
+        _soldier_row = await db.fetchone(
+            "SELECT COALESCE(SUM(quantity),0) c FROM player_assets WHERE user_id=? AND item_type='soldier'",
+            (attacker_id,))
+        units = sum(plan.values()) + int((_soldier_row or {}).get("c") or 0)
+        sup = await supply_mod.consume_attack(attacker_id, units)
+        atk_power *= sup["factor"]
+        extra_supply_lines = sup.get("lines") or []
+        # انبار خالی مدافع هم پدافند را می‌شکند
+        d_def *= await supply_mod.unfed_factor(defender_id)
+    except Exception:
+        log.exception("supply apply failed")
+    # ❄️ آب‌وهوا: زمستان و طوفان عملیات را کند می‌کند
+    try:
+        from core import weather as weather_mod
+        atk_power *= await weather_mod.attack_multiplier()
+    except Exception:
+        pass
+    # 🏛 حزب حاکم نظامی: بونوس حمله
+    try:
+        from core import elections as elections_mod
+        atk_power *= 1.0 + await elections_mod.attack_bonus(attacker_id)
+    except Exception:
+        pass
+    # 📡 پایگاه خارجی: میزبان بونوس دفاعی و مهمان بونوس حمله می‌گیرد
+    try:
+        from core import bases as bases_mod
+        d_def *= await bases_mod.defense_bonus(defender_id)
+        atk_power *= await bases_mod.attack_bonus(attacker_id)
+    except Exception:
+        pass
+
     chance = combat.battle_chance(atk_power, d_def)
     won = random.random() < chance
     atk_loss, def_loss = combat.loss_ratios(chance, strat)
+
+    # ⏳ قفل کول‌داون **قبل** از اجرای نبرد ثبت می‌شود؛ وگرنه دو بار زدن سریع روی
+    # «حمله» دو نبرد در یک لحظه اجرا می‌کرد (نیروها دو بار می‌جنگیدند).
+    try:
+        await db.execute(
+            "UPDATE states SET last_attack_at=? WHERE user_id=?", (iso(), attacker_id))
+    except Exception:
+        pass
 
     # تلفات و غارت
     defender_user = await db.fetchone("SELECT * FROM users WHERE id=?", (defender_id,)) or {"money": 0}
@@ -862,20 +985,51 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         pass
 
     # ─── کسر تلفات واقعی از هر دو طرف (تجهیزات + سرباز) ───
-    atk_rows = await combat.equipment_rows(attacker_id, only_ids=[int(i) for i in plan.keys()])
-    atk_destroyed_names, atk_lost_units = await combat.apply_losses(
-        attacker_id, atk_rows, atk_loss, "equipment")
-    def_destroyed_names, def_lost_units = await combat.apply_losses(
-        defender_id, def_equipment_list, def_loss * await attr.loss_multiplier(defender_id),
-        "equipment")
+    # 🎯 فقط یگان‌هایی که واقعاً فرستاده شده‌اند تلفات سنگین می‌دهند و تعداد
+    # کشته‌شدگان مدافع به تعداد نیروی اعزامی مهاجم سقف دارد — نه درصدی از انبار.
+    sent_qty = {int(k): int(v) for k, v in plan.items()}
+    soldier_total = int((await db.fetchone(
+        "SELECT COALESCE(SUM(quantity),0) c FROM player_assets "
+        "WHERE user_id=? AND item_type='soldier'", (attacker_id,)) or {}).get("c") or 0)
+    combat.set_deployed(attacker_id, "equipment", sent_qty)
+    if sent_qty:
+        # 📦 تلفات = ۲۶٪ از **همان نیرویی که فرستادی**، نه ۲۶٪ از کل انبار.
+        # اگر سرباز هم همراه نبرد بوده، بخشی از تلفات به سربازها می‌خورد.
+        units_sent = sum(sent_qty.values())
+        soldier_share = (soldier_total / (soldier_total + units_sent)) * 0.5 if soldier_total else 0
+        killed_total = int(round(units_sent * atk_loss))
+        # یگان‌های کوچک هم آسیب می‌بینند: اگر واقعاً جنگیده باشی، دست‌کم یک یگان
+        # از دست می‌رود (نه صفر مطلق که حس «بی‌ضرر بودن جنگ» بدهد).
+        if killed_total == 0 and units_sent >= 3 and atk_loss >= 0.05:
+            killed_total = 1
+        eq_killed = max(0, int(round(killed_total * (1 - soldier_share))))
+        atk_destroyed_names, atk_lost_units = await combat.apply_sent_losses(
+            attacker_id, await combat.equipment_rows(attacker_id), eq_killed, sent_qty)
+        atk_loss_note = (f"از {fmt(units_sent)} یگان اعزامی، {fmt(atk_lost_units)} یگان نابود شد "
+                         f"({round(atk_loss * 100)}٪) — ذخیره‌گاه انبار دست‌نخورده ماند")
+    else:
+        # 🪖 حمله فقط با سرباز انجام شد — تجهیزات ذخیره اصلاً وارد نبرد نشده‌اند
+        atk_destroyed_names, atk_lost_units = [], 0
+        atk_loss_note = "این حمله فقط با سرباز انجام شد؛ تجهیزات شما درگیر نشدند."
+    # 🛡 مدافع فقط در همان جبهه آسیب می‌بیند (تانک در نبرد دریایی نمی‌سوزد).
+    # سربازها هم یگان رزمی‌اند (با وزن کمتر برای انهدام تجهیزات).
+    force_units = sum(sent_qty.values()) + int(soldier_total * 0.5)
+    defend_kill_cap = await combat.defend_cap(attacker_id, force_units)
+    def_destroyed_names, def_lost_units = await combat.apply_front_losses(
+        defender_id, def_equipment_list,
+        def_loss * await attr.loss_multiplier(defender_id), defend_kill_cap,
+        "equipment", fronts)
 
-    # سربازان دو طرف هم در نبرد کشته می‌شوند
-    s_atk, s_atk_units = await combat.apply_soldier_losses(attacker_id, atk_loss * 0.7)
+    # سربازان دو طرف هم در نبرد کشته می‌شوند (به نسبت حضورشان در نبرد)
+    s_atk, s_atk_units = await combat.apply_soldier_losses(
+        attacker_id, atk_loss * (0.7 if not sent_qty else 0.5 + soldier_share))
     if s_atk:
         atk_destroyed_names += s_atk
         atk_lost_units += s_atk_units
-    s_def, s_def_units = await combat.apply_soldier_losses(
-        defender_id, def_loss * 0.6 * await attr.loss_multiplier(defender_id))
+    s_def, s_def_units = await combat.apply_capped_losses(
+        defender_id, await combat.soldier_rows(defender_id),
+        def_loss * 0.6 * await attr.loss_multiplier(defender_id),
+        max(60, defend_kill_cap * 40), "soldier")
     if s_def:
         def_destroyed_names += s_def
         def_lost_units += s_def_units
@@ -906,6 +1060,29 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
 
     extra_lines = []
     extra_lines.extend(attrition_lines)
+    # 🎯 شفافیت کامل: چه فرستادیم، چه از دست دادیم، چقدر از دشمن نابود شد
+    sent_total = sum(int(v) for v in plan.values())
+    if sent_total:
+        extra_lines.append(f"📦 <b>نیروی اعزامی:</b> {fmt(sent_total)} یگان"
+                           f" (سقف تلفات دشمن در این نبرد: {fmt(defend_kill_cap)} یگان)")
+    else:
+        extra_lines.append("📦 <b>نیروی اعزامی:</b> فقط سرباز (تجهیزات درگیر نبودند)")
+    if atk_loss_note:
+        extra_lines.append("🎯 " + atk_loss_note)
+    if def_lost_units:
+        extra_lines.append(f"💥 از دشمن: {fmt(def_lost_units)} یگان در جبههٔ "
+                           f"{atype_fa} نابود شد")
+    elif atype in ("sea", "land", "air"):
+        extra_lines.append("🛡 دشمن در این جبهه تجهیزاتی از دست نداد "
+                           "(دفاع با سرباز/پدافند بود یا در همان جبهه یگانی نداشت)")
+    extra_lines.extend(extra_supply_lines)
+    # 📡 ورود خودکار متحد قراردادی (پایگاه خارجی)
+    try:
+        from core import bases as bases_mod
+        extra_lines.extend(await bases_mod.auto_join_if_attacked(
+            call.bot, defender_id, attacker_id))
+    except Exception:
+        log.exception("foreign base auto join failed")
     if intercepted_missiles:
         extra_lines.append(
             f"🛡️ <b>پدافند هوایی مدافع:</b> {round(intercept_rate * 100)}٪ از موشک‌ها و راکت‌های شلیک‌شده "
@@ -971,13 +1148,6 @@ async def resolve_battle(call, war: dict, plan: dict, atype: str):
         atk_units=atk_lost_units, def_units=def_lost_units,
         atk_ratio=atk_loss, def_ratio=def_loss,
         extra_lines=extra_lines, title=f"گزارش نبرد {atype_fa}")
-
-    # ⏳ ثبت زمان حمله برای کول‌داون ۳ دقیقه‌ای
-    try:
-        await db.execute(
-            "UPDATE states SET last_attack_at=? WHERE user_id=?", (iso(), attacker_id))
-    except Exception:
-        pass
 
     await announce(call.bot, result_text, section="war_attack")
     await call.answer()

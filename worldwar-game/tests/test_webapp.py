@@ -22,8 +22,19 @@ async def main():
     await init_db()
     dp, bot = await H.new_game_dp()
     app = create_app(bot, dp, None, None, autostart=False)
+    # 🔐 پنل حالا پشت ورود است: در تست با همان گذرواژهٔ ساخته‌شده وارد می‌شویم
+    from core import security as sec
+    os.environ.pop("PANEL_PASSWORD", None)
+    pwd, _fresh = await sec.ensure_panel_password()
 
     async with TestClient(TestServer(app)) as client:
+        H.check((await client.get("/api/secrets")).status == 401,
+                "بدون ورود، /api/secrets قفل است")
+        r = await client.post("/api/panel/login", json={"password": "wrong-password"})
+        H.check(r.status == 401, "گذرواژهٔ اشتباه رد می‌شود")
+        r = await client.post("/api/panel/login", json={"password": pwd})
+        H.check(r.status == 200 and (await r.json()).get("success") is True, "ورود به پنل")
+
         print("\n== TEST 1: /health و /api/health ==")
         r = await client.get("/health")
         data = await r.json()
@@ -116,8 +127,11 @@ async def main():
         wb = await (await client.get("/api/webhook/status")).json()
         H.check("relay" in wb and "telegram" in wb, "وضعیت وبهوک")
         r = await client.post("/webhook/game", json={"update_id": 1})
-        body = await r.json()
-        H.check(r.status == 200 and body.get("ok") is True, "آپدیت به وبهوک رله/پردازش شد")
+        tw = await client.get("/api/webhook/status")
+        tw_body = await tw.json()
+        H.check(tw.status == 200 and r.status == 403,
+                f"آپدیت بدون کلید معتبر رد می‌شود ({r.status})")
+        H.check("relay" in tw_body, "وضعیت وبهوک")
         r = await client.post("/api/webhook/mode", json={"mode": "nonsense"})
         H.check(r.status == 400, "حالت نامعتبر وبهوک رد می‌شود")
 

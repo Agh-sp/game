@@ -37,7 +37,7 @@ import logging
 import random
 
 from core.db import db, get_setting
-from core.utils import fmt, iso
+from core.utils import add_hours, fmt, iso
 
 log = logging.getLogger(__name__)
 
@@ -167,6 +167,34 @@ def _is_air_defense(name: str, sub: str | None = None) -> bool:
     return any(w in text for w in AIR_DEFENSE_WORDS)
 
 
+LONG_RANGE_WORDS = ("موشک", "راکت", "بمب‌افکن", "بمباران‌کننده", "هواپیمای بمب", "پهپاد")
+LONG_RANGE_SUBS = ("ballistic", "cruise", "antiship", "space_weapon", "artillery",
+                   "bomber", "fighter", "attack")
+
+
+async def _has_long_range(attacker_id: int) -> bool:
+    """آیا مهاجم سلاح برد بلند تهاجمی دارد؟ (پدافند به حساب نمی‌آید)"""
+    try:
+        rows = await db.fetchall(
+            "SELECT e.name AS name, e.subcategory AS sub, c.key AS cat_key, a.quantity AS q "
+            "FROM player_assets a JOIN equipment e ON e.id=a.item_id "
+            "LEFT JOIN equipment_categories c ON c.id=e.category_id "
+            "WHERE a.user_id=? AND a.item_type='equipment' AND a.quantity>0", (attacker_id,))
+    except Exception:
+        return False
+    for r in rows:
+        name = r.get("name") or ""
+        if _is_air_defense(name, r.get("sub")):
+            continue
+        if r.get("cat_key") in ("missile", "air", "space"):
+            return True
+        if (r.get("sub") or "").lower() in LONG_RANGE_SUBS:
+            return True
+        if any(w in name for w in LONG_RANGE_WORDS):
+            return True
+    return False
+
+
 async def air_shield(defender_id: int) -> int:
     """🛡 خالص پدافند هوایی کشور (بدون استحکام سازه‌های دیگر)."""
     try:
@@ -190,6 +218,11 @@ async def can_sabotage(attacker_id: int, kind: str) -> tuple[bool, str]:
     if not info:
         return False, "❌ هدف نامعتبر است."
     cats = await weapon_categories(attacker_id)
+    # 🎯 برای تأسیسات هسته‌ای هر سلاح برد بلندی کافی است (موشک/بمب‌افکن/فضایی)؛
+    # دسته‌بندی تجهیزات در دیتابیس همیشه دقیق نیست، پس نام/زیردسته هم بررسی می‌شود.
+    if kind == "nuclear" and not cats & {"missile", "air", "space"}:
+        if await _has_long_range(attacker_id):
+            cats = cats | {"missile"}
     if not cats & set(info["needs"]):
         need_fa = {"missile": "🚀 موشک بالستیک/کروز", "air": "✈️ بمب‌افکن",
                    "space": "🛰 تسلیحات فضایی", "cyber": "🕶 تجهیزات سایبری"}
@@ -461,9 +494,15 @@ async def sabotage(bot, attacker_id: int, defender_id: int, kind: str,
     a_name = f"{a_country['flag']} <b>{a_country['name']}</b>" if a_country else "مهاجم"
     d_name = f"{d_country['flag']} <b>{d_country['name']}</b>" if d_country else "مدافع"
 
-    # ☢️ تأسیسات هسته‌ای موتور اختصاصی خودش را دارد
+    # ☢️ تأسیسات هسته‌ای موتور اختصاصی خودش را دارد؛ فقط این‌جا بررسی می‌کنیم
+    # که هدف واقعاً تأسیسات فعال دارد تا پیام گمراه‌کننده ندهیم.
     if kind == "nuclear":
         from core import nuclear as nuke
+        site = await nuke.sync_stage(defender_id)
+        if not site:
+            return "❌ این کشور تأسیسات هسته‌ای ندارد — اول باید غنی‌سازی را شروع کند."
+        if int(site.get("hp") or 0) <= 0 or not int(site.get("active") or 0):
+            return "🔥 تأسیسات هسته‌ای این کشور از قبل از کار افتاده است."
         report = await nuke.strike(bot, attacker_id, defender_id)
         await _record(attacker_id, defender_id, kind, item_id, 1, report)
         await _add_wear(defender_id, attacker_id,
@@ -553,6 +592,41 @@ async def sabotage(bot, attacker_id: int, defender_id: int, kind: str,
         lines += ["💥 <b>پدافند هوایی دشمن شکست!</b>",
                   f"  • 🎖 تجهیزات پدافندی نابودشده: <b>{fmt(destroyed)}</b>",
                   "  • 🛡 برای حملات بعدی، سپر دشمن ضعیف‌تر است."]
+
+    # ⚡ اثر آبشاری شبکهٔ برق / اینترنت (خاموشی چندساعته)
+    extra_note = ""
+    try:
+        from core import grid as grid_mod
+        if kind in ("power", "internet") and destroyed:
+            res = await grid_mod.strike(defender_id, kind)
+            if res.get("line"):
+                lines.append(res["line"])
+                extra_note = res["line"]
+    except Exception:
+        log.exception("grid cascade failed")
+    # 🚚 سوزاندن بخشی از انبار مهمات و سوخت دشمن
+    try:
+        from core import supply as supply_mod
+        if kind in ("industry", "oil") and destroyed:
+            burned = await supply_mod.burn_share(defender_id)
+            if burned["ammo"] or burned["fuel"]:
+                lines.append(f"🚚 <b>تدارکات سوخته:</b> {fmt(burned['ammo'])} مهمات و "
+                             f"{fmt(burned['fuel'])} سوخت از انبار دشمن از بین رفت.")
+                await db.execute(
+                    "UPDATE states SET supply_loss_until=? WHERE user_id=?",
+                    (add_hours(6), defender_id))
+    except Exception:
+        log.exception("supply burn failed")
+    # 🏃 موج پناهندگان از زیرساخت ویران‌شده
+    try:
+        from core import refugees as ref_mod
+        if kind in ("power", "water", "gas", "industry") and destroyed:
+            fl = await ref_mod.flight_tick(defender_id)
+            if fl.get("fled"):
+                lines.append(f"🏃 <b>موج پناهندگان:</b> {fmt(fl['fled'])} نفر از "
+                             "زیرساخت‌های ویران‌شده فرار کردند.")
+    except Exception:
+        log.exception("refugee tick failed")
 
     # ─── پیامدهای سیاسی و فرسایش ───
     sat_hit = await _num("sabotage_satisfaction_hit", DEFAULT_SAT_HIT)
