@@ -176,16 +176,74 @@ async def apply_losses(user_id: int, rows: list[dict], ratio: float,
     return out, total
 
 
-_DEPLOYED: dict[tuple[int, str], list[int]] = {}
+# ─── 🎯 مدل تلفات واقعی نبرد ───
+# برای هر نبرد ثبت می‌شود: چه یگان‌هایی با چه تعدادی اعزام شدند، نوع عملیات چه بود
+# و مدافع چه تعداد یگان و سرباز در جبهه داشت. سپس تلفات *فقط* روی همان چیزی
+# محاسبه می‌شود که واقعاً جنگیده است:
+#
+#   • یگان‌های اعزامی → تلفات بر اساس همان تعداد ارسالی (نه کل انبار)؛
+#   • ذخیره‌گاه (یگان‌های نرفته) → فرسایش ناچیز و قابل تنظیم؛
+#   • مدافع → فقط تجهیزات هم‌جبهه (دریایی در برابر دریایی، زمینی در برابر زمینی…)
+#     و سقف کل تلفات = یگان اعزامی مهاجم × `battle_defender_kill_ratio`؛
+#   • حملهٔ فقط-سرباز → تجهیزات ذخیرهٔ مهاجم دست‌نخورده می‌ماند.
+_DEPLOYED: dict[tuple[int, str], dict[int, int]] = {}     # (uid, type) → {item_id: تعداد اعزامی}
+_BATTLE_CTX: dict[str, dict] = {}                          # زمینهٔ آخرین نبرد برای گزارش
+
+# جبههٔ هر نوع عملیات: تجهیزات مدافع که در آن جبهه واقعاً درگیر می‌شوند
+FRONT_CATS: dict[str, tuple[str, ...]] = {
+    "sea": ("sea", "air"),          # نبرد دریایی: ناوها + پوشش هوایی
+    "air": ("air", "sea"),          # پوشش هوایی/حامل‌ها
+    "land": ("land", "air"),        # زرهی/پیاده + پشتیبانی هوایی
+    "missile": ("air", "land", "missile", "sea"),   # پدافند، سامانه‌های زمینی و بندرها
+    "space": ("space", "air", "missile", "sea", "land"),
+    "mixed": ("sea", "air", "land", "missile", "space"),
+}
 
 
-def set_deployed(user_id: int, item_type: str, ids: list[int]) -> None:
-    """ثبت یگان‌هایی که در این نبرد واقعاً شرکت کرده‌اند (برای محاسبهٔ تلفات)."""
-    _DEPLOYED[(int(user_id), item_type)] = [int(i) for i in ids]
+def set_deployed(user_id: int, item_type: str, ids, quantities: dict | None = None) -> None:
+    """ثبت یگان‌هایی که در این نبرد واقعاً شرکت کرده‌اند (با تعداد اعزامی)."""
+    if isinstance(ids, dict):
+        quantities = ids
+        ids = list(ids.keys())
+    ids = [int(i) for i in (ids or [])]
+    qty = {int(k): int(v) for k, v in (quantities or {}).items()}
+    _DEPLOYED[(int(user_id), item_type)] = {i: max(0, qty.get(i, 0)) or 1 for i in ids}
+
+
+def deployed_map(user_id: int, item_type: str = "equipment") -> dict[int, int]:
+    return dict(_DEPLOYED.get((int(user_id), item_type), {}))
+
+
+def deployed_total(user_id: int, item_type: str = "equipment") -> int:
+    return sum(_DEPLOYED.get((int(user_id), item_type), {}).values())
+
+
+def clear_deployed(user_id: int, item_type: str = "equipment") -> None:
+    _DEPLOYED.pop((int(user_id), item_type), None)
+
+
+def set_battle_context(**kw) -> None:
+    """ذخیرهٔ زمینهٔ نبرد (نوع عملیات، تعداد یگان‌های مدافع در جبهه…) برای گزارش."""
+    _BATTLE_CTX.clear()
+    _BATTLE_CTX.update(kw)
+
+
+def battle_context() -> dict:
+    return dict(_BATTLE_CTX)
 
 
 def _deployed_ids(user_id: int, item_type: str) -> set[int]:
-    return set(_DEPLOYED.get((int(user_id), item_type), []))
+    return set(_DEPLOYED.get((int(user_id), item_type), {}))
+
+
+def _loss_rows(user_id: int, rows: list[dict], item_type: str) -> tuple[list, list]:
+    """جدا کردن یگان‌های درگیر از ذخیره‌گاه."""
+    ids = _deployed_ids(user_id, item_type)
+    if not ids:
+        return list(rows), []
+    deployed = [r for r in rows if int(r.get("id") or 0) in ids]
+    reserve = [r for r in rows if int(r.get("id") or 0) not in ids]
+    return deployed, reserve
 
 
 async def apply_capped_losses(user_id: int, rows: list[dict], ratio: float,
@@ -202,11 +260,25 @@ async def apply_capped_losses(user_id: int, rows: list[dict], ratio: float,
     budget = int(cap_total)
     out: list[str] = []
     total = 0
-    # اول یگان‌های خط مقدم (کم‌تعدادترها) آسیب می‌بینند
-    for r in sorted(rows, key=lambda x: int(x.get("quantity") or 0)):
+    # حق تلفات متناسب با اندازهٔ هر یگان تقسیم می‌شود تا همیشه یک یگان کوچک
+    # همهٔ سهم را نبلعد (نه اینکه فقط «کم‌تعدادها» بمیرند).
+    weights = {}
+    for r in rows:
+        lost = _lost_count(int(r.get("quantity") or 0), ratio)
+        if lost > 0:
+            weights[int(r["id"])] = lost
+    if not weights:
+        return [], 0
+    all_lost = sum(weights.values())
+    scale = min(1.0, budget / all_lost)
+    for r in sorted(rows, key=lambda x: weights.get(int(x["id"]), 0)):
         if budget <= 0:
             break
-        lost = min(_lost_count(int(r["quantity"] or 0), ratio), budget)
+        want = weights.get(int(r["id"]), 0)
+        if want <= 0:
+            continue
+        lost = min(want if scale >= 1.0 else max(1, int(round(want * scale))), budget,
+                   int(r.get("quantity") or 0))
         if lost <= 0:
             continue
         if await sub_asset(user_id, item_type, int(r["id"]), lost):
@@ -217,8 +289,8 @@ async def apply_capped_losses(user_id: int, rows: list[dict], ratio: float,
 
 
 async def attacker_deployed_units(user_id: int) -> int:
-    """تعداد یگان‌های اعزامی مهاجم در نبرد جاری."""
-    return len(_DEPLOYED.get((int(user_id), "equipment"), []))
+    """تعداد یگان‌های اعزامی مهاجم در نبرد جاری (تعداد، نه تنوع)."""
+    return deployed_total(user_id, "equipment")
 
 
 async def defend_cap(attacker_id: int, attacker_units: int,
@@ -230,7 +302,7 @@ async def defend_cap(attacker_id: int, attacker_units: int,
             per_unit = float(str(await get_setting("battle_defender_kill_ratio", "1.5")) or 1.5)
         except Exception:
             per_unit = 1.5
-    units = attacker_units or len(_DEPLOYED.get((int(attacker_id), "equipment"), []))
+    units = attacker_units or deployed_total(attacker_id, "equipment")
     return max(1, int(round(units * per_unit)))
 
 
@@ -240,11 +312,11 @@ async def apply_attrition_losses(user_id: int, rows: list[dict], ratio: float,
     """🎯 تلفات واقعی بر اساس **نبرد** نه بر اساس کل انبار.
 
     باگ گزارش‌شده: «۵ کشتی می‌فرستم، دشمن یکی دو هواپیما دارد، بعد می‌بینم
-    ۱۰۰ ناو هواپیمابر نابود شده». دلیلش این بود که تلفات درصدی از **کل** انبار
-    کسر می‌شد. اکنون:
+    ۱۰۰ ناو هواپیمابر نابود شده». اکنون:
 
-      • تلفات اصلی فقط از یگان‌های **درگیر** (`set_deployed`) گرفته می‌شود؛
-      • انبار ذخیره حداکثر چند درصد فرسایش می‌بیند (قابل تنظیم)؛
+      • تلفات اصلی فقط از یگان‌های **درگیر** و به نسبت تعداد اعزامی گرفته می‌شود؛
+      • انبار ذخیره حداکثر چند درصد فرسایش می‌بیند (قابل تنظیم) و اگر هیچ یگانی
+        اعزام نشده باشد (حملهٔ فقط-سرباز) کاملاً دست‌نخورده می‌ماند؛
 
     خروجی: (فهرست تلفات، مجموع، توضیح شفاف برای گزارش)
     """
@@ -255,37 +327,107 @@ async def apply_attrition_losses(user_id: int, rows: list[dict], ratio: float,
     except Exception:
         reserve_ratio = 0.02
     reserve_ratio = max(0.0, min(0.2, reserve_ratio))
-    deployed_ids = _deployed_ids(user_id, item_type)
-    if deployed_ids:
-        deployed = [r for r in rows if int(r.get("id") or 0) in deployed_ids]
-        reserve = [r for r in rows if int(r.get("id") or 0) not in deployed_ids]
-    else:
-        # اگر چیزی ثبت نشده باشد، همه درگیر فرض می‌شوند (سازگاری عقب‌رو)
-        deployed, reserve = list(rows), []
+    deployed_map_ = deployed_map(user_id, item_type)
+    deployed, reserve = _loss_rows(user_id, rows, item_type)
 
     out: list[str] = []
     total = 0
-    lines, n = await apply_losses(user_id, deployed, ratio, item_type)
-    out.extend(lines)
-    total += n
-    if reserve and reserve_ratio > 0:
+    notes: list[str] = []
+    if deployed and deployed_map_:
+        # تلفات هر یگان = نسبت تلفات × تعداد واقعاً اعزام‌شده از آن یگان
+        scaled: list[dict] = []
+        for r in deployed:
+            sent = deployed_map_.get(int(r["id"])) or int(r.get("quantity") or 0)
+            scaled.append({**r, "quantity": min(sent, int(r.get("quantity") or 0))})
+        lines, n = await apply_losses(user_id, scaled, ratio, item_type)
+        out.extend(lines)
+        total += n
+        notes.append(f"تلفات فقط از {fmt(deployed_total(user_id, item_type))} یگانِ اعزامی محاسبه شد")
+    elif not deployed_map_:
+        # چیزی اعزام نشده (مثلاً حملهٔ فقط-سرباز) → تجهیزات اصلاً درگیر نبوده‌اند
+        lines, n = await apply_losses(user_id, deployed, ratio, item_type)
+        out.extend(lines)
+        total += n
+    if reserve and reserve_ratio > 0 and deployed_map_:
         kept: list[str] = []
         spilled = 0
         for r in reserve:
             qty = int(r.get("quantity") or 0)
-            # فقط بخش کوچکی از هر یگان ذخیره درگیر می‌شود (نه درصدی از کل)
-            lost = 1 if qty >= 20 and random.random() < reserve_ratio else 0
+            # فرسایش ذخیره‌گاه: درصدی از همان یگان (حداکثر ۲ یگان) و تنها اگر
+            # انبار واقعاً بزرگ باشد — نه اینکه هر نبرد یک یگان از هر قلم بسوزاند.
+            lost = 0
+            if qty >= 50 and reserve_ratio > 0:
+                lost = min(2, int(qty * reserve_ratio))
+                if lost <= 0 and random.random() < reserve_ratio:
+                    lost = 1
             if lost and await sub_asset(user_id, item_type, int(r["id"]), lost):
                 kept.append(f"{fmt(lost)}× {r.get('emoji') or '▫️'} {r['name']}")
                 spilled += lost
         if kept:
             out.extend([f"{x} (ذخیره)" for x in kept[:4]])
             total += spilled
-    note = ""
-    if reserve:
-        note = (f"تلفات فقط از {len(deployed)} یگانِ درگیر محاسبه شد؛ "
-                f"ذخیرهگاه انبار تقریباً دست‌نخورده ماند.")
+            notes.append("ذخیره‌گاه انبار تقریباً دست‌نخورده ماند")
+    note = "؛ ".join(notes)
     return out, total, note
+
+
+async def apply_sent_losses(user_id: int, rows: list[dict], killed_total: int,
+                            sent: dict[int, int] | None = None,
+                            item_type: str = "equipment") -> tuple[list[str], int]:
+    """⚔️ تلفات مهاجم بر اساس **تعداد اعزامی هر یگان** و تعداد کل کشته‌ها.
+
+    اگر ۱۰۰ کشتی داشته باشی و ۵ تا بفرستی و ۲۶٪ تلفات بدهی، فقط از همان ۵ تا
+    کم می‌شود (۲ کشتی)، نه ۲۶ کشتی از کل انبار. اگر سربازی هم همراه نبرد بوده
+    بخشی از تلفات به سربازها می‌خورد (متناسب).
+    """
+    sent = {int(k): int(v) for k, v in (sent or deployed_map(user_id, item_type)).items()}
+    if not rows or killed_total <= 0:
+        return [], 0
+    picked = [r for r in rows if int(r.get("id") or 0) in sent and sent[int(r["id"])] > 0]
+    if not picked:
+        return [], 0
+    sent_total = sum(sent[int(r["id"])] for r in picked)
+    if sent_total <= 0:
+        return [], 0
+    killed = min(int(killed_total), sent_total)
+    out: list[str] = []
+    total = 0
+    left = killed
+    for r in sorted(picked, key=lambda x: sent[int(x["id"])], reverse=True):
+        if left <= 0:
+            break
+        share = max(1, int(round(killed * sent[int(r["id"])] / sent_total)))
+        take = min(share, left, int(r.get("quantity") or 0), sent[int(r["id"])])
+        if take <= 0:
+            continue
+        if await sub_asset(user_id, item_type, int(r["id"]), take):
+            out.append(f"{fmt(take)}× {r.get('emoji') or '▫️'} {r['name']}")
+            total += take
+            left -= take
+    return out, total
+
+
+async def apply_front_losses(user_id: int, rows: list[dict], ratio: float,
+                             cap_total: int, item_type: str = "equipment",
+                             fronts: tuple[str, ...] | None = None
+                             ) -> tuple[list[str], int]:
+    """🛡 تلفات مدافع: فقط تجهیزات هم‌جبهه و با سقف کل.
+
+    اگر `fronts` داده شود، تنها یگان‌هایی آسیب می‌بینند که در آن جبهه واقعاً
+    درگیر می‌شوند (تانک در نبرد دریایی نمی‌سوزد). اگر هیچ یگانی در آن جبهه
+    نباشد، دفاع صرفاً با سرباز/پدافند است و تجهیزات دست‌نخورده می‌مانند.
+    """
+    if not rows or ratio <= 0 or cap_total <= 0:
+        return [], 0
+    pool = rows
+    if fronts:
+        same = [r for r in rows if (r.get("cat_key") or "") in fronts]
+        if same:
+            pool = same
+        else:
+            # هیچ تجهیزی در این جبهه نیست → فقط سرباز/پدافند آسیب می‌بیند
+            return [], 0
+    return await apply_capped_losses(user_id, pool, ratio, cap_total, item_type)
 
 
 async def apply_unit_losses(user_id: int, ratio: float, cat_keys: tuple[str, ...],

@@ -248,7 +248,8 @@ async def main():
     kept = atk_reserve_before - atk_reserve_after
     H.check(kept <= 4, f"ذخیره‌گاه مهاجم دست‌نخورده ماند (از دست رفته: {kept} از {atk_reserve_before})")
     rep = "\n".join(channel_texts())
-    H.check("یگانِ درگیر" in rep, "گزارش نبرد توضیح می‌دهد تلفات از یگان‌های درگیر است")
+    H.check(("یگان اعزامی" in rep or "یگانِ درگیر" in rep),
+            "گزارش نبرد توضیح می‌دهد تلفات از یگان‌های اعزامی/درگیر است")
 
     print("\n=== TOTAL ERRORS:", len(H.ERRORS))
     for e in H.ERRORS:

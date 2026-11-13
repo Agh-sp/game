@@ -236,8 +236,16 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
     atk_ratio = max(atk_ratio, min_atk_loss)
 
     # تلفات واقعی هر دو طرف (کسر از ناوگان و سربازان)
-    atk_losses, atk_units = await combat.apply_unit_losses(user_id, atk_ratio, ("sea",))
-    def_losses, def_units = await combat.apply_losses(old_owner, def_rows, def_ratio, "equipment")
+    # 🎯 همان باگ «۵ کشتی، ۱۰۰ ناو نابود» در نبرد تنگه هم بود: تلفات درصدی از کل
+    # ناوگان گرفته می‌شد. اکنون سقف تلفات مدافع به اندازهٔ ناوگان واقعاً درگیر
+    # مهاجم است و تجهیزات غیردریایی هم آسیب نمی‌بینند.
+    atk_rows = await combat.equipment_rows(user_id, ("sea",))
+    atk_units_in_fight = sum(int(r.get("quantity") or 0) for r in atk_rows)
+    def_kill_cap = await combat.defend_cap(user_id, atk_units_in_fight)
+    atk_losses, atk_units = await combat.apply_capped_losses(
+        user_id, atk_rows, atk_ratio, atk_units_in_fight, "equipment")
+    def_losses, def_units = await combat.apply_front_losses(
+        old_owner, def_rows, def_ratio, def_kill_cap, "equipment", ("sea", "air"))
     if strat["key"] in ("amphibious", "combined"):
         s_atk, s_atk_u = await combat.apply_soldier_losses(user_id, atk_ratio * 0.6)
         if s_atk:
@@ -249,7 +257,9 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
         def_units += s_def_u
 
     extra = [
-        f"♻️ <b>نبرد فرسایشی:</b> ناوگان مدافع {round(attrition * 100)}٪ آسیب دید."
+        f"♻️ <b>نبرد فرسایشی:</b> ناوگان مدافع {round(attrition * 100)}٪ آسیب دید.",
+        f"⚓ <b>ناوگان درگیر:</b> شما {fmt(atk_units_in_fight)} یگان — "
+        f"سقف انهدام ناوگان مدافع در این نبرد: {fmt(def_kill_cap)} یگان",
     ]
     if won:
         await db.execute("UPDATE straits SET owner_id=?, captured_at=? WHERE id=?",

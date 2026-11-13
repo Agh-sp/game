@@ -15,6 +15,8 @@ python3 tests/test_new_features.py   # پرچم، عکس اعلان‌ها، س�
 python3 tests/test_regression.py     # رای ۳۰ دقیقه‌ای، حمله موشکی/زمینی، مذاکره، فیش ادمین
 python3 tests/test_adminpanel.py     # پنل /panel، سوپرادمین ۸۶۶۶۵۰۱۸۶۶ و لاگ ادمین‌ها
 python3 tests/test_combat.py         # نبرد واقعی تنگه‌ها و تلفات دو طرف
+python3 tests/test_attacks.py        # هر ۷ نوع حمله از دکمه‌های ربات + تلفات جبهه‌ای
+python3 tests/test_nuke.py           # بمب اتم: ساخت، زرادخانه، شلیک، خرابکاری هسته‌ای
 python3 tests/test_politics_oil.py   # انقلاب، انتخابات، دکل نفت و تجارت خودکار
 python3 tests/test_realism.py        # ۱۰ موتور واقع‌گرایی (تأمین، اعتصاب، تورم، جاسوسی، …)
 python3 tests/test_security.py       # 🛡 امنیت: وبهوک بی‌کلید، آپدیت جعلی، پنل بدون ورود، همگانی
