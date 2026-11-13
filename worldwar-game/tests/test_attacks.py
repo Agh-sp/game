@@ -241,14 +241,18 @@ async def main():
         await give(DEFENDER, "equipment", carrier["id"], 80)
         await db.execute("UPDATE straits SET owner_id=? WHERE id=?", (DEFENDER, st_row["id"]))
         await set_setting("strait_attrition_percent", "18")
-        cap = await combat.defend_cap(ATTACKER, 5)
+        # ⚓ در تنگه همهٔ ۸۰ ناو مدافع درگیرند؛ فرسایش تضمینی ۱۸٪ = حداکثر ۱۵ ناو
+        from core.db import get_setting
+        attrition = float(await get_setting("strait_attrition_percent", "18")) / 100
+        cap = max(1, int(80 * max(attrition, 0.03)))
         before = await qty(DEFENDER, "equipment", carrier["id"])
         H.SENT.clear()
         await straits.capture_strait(bot, ATTACKER, st_row["id"])
         after = await qty(DEFENDER, "equipment", carrier["id"])
         H.check(before - after <= cap,
-                f"تلفات ناوگان مدافع در تنگه از سقف رد نشد ({before - after} ≤ {cap})")
-        H.check(after >= before - 12, f"ناوگان بزرگ مدافع در یک حمله نابود نشد ({after} از {before})")
+                f"تلفات ناوگان مدافع در تنگه از سقف فرسایش رد نشد ({before - after} ≤ {cap})")
+        H.check(after >= before - 20,
+                f"ناوگان ۸۰ ناوی مدافع در یک حمله نابود نشد ({after} از {before})")
     else:
         H.check(True, "تنگه‌ای برای تست وجود ندارد (رد شد)")
 

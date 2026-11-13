@@ -1,5 +1,21 @@
 # 🚀 اجرای ربات‌ها روی PythonAnywhere (حساب `arezog210`)
 
+> ## ⚡️ اگر `paw_start.py` می‌گوید `404 NOT FOUND`
+>
+> پیام `{"ok": false, "httpStatus": 404}` و `botsReady=None` یعنی **اپ وب روی
+> PythonAnywhere به این پروژه وصل نیست** — نه اینکه ربات خراب باشد. کد پایتون
+> **هرگز** نباید در Bash console اجرا شود؛ محتوای زیر فقط داخل فایل WSGI
+> (تب **Web → WSGI configuration file**) قرار می‌گیرد.
+>
+> سریع‌ترین مسیر:
+> ```bash
+> cd ~/game/worldwar-game
+> python3 paw_update.py --base-url https://arezog210.pythonanywhere.com   # کد تازه + استارت
+> python3 paw_doctor.py --base-url https://arezog210.pythonanywhere.com # عیب‌یابی دقیق
+> ```
+> و اگر `paw_doctor` گفت «اپ وب وصل نیست»، فقط مرحلهٔ ۳ همین راهنما (فایل WSGI +
+> Reload) را انجام بده و دوباره `paw_start.py` را بزن.
+
 این راهنما دقیقاً برای مسیر `/home/arezog210/game` نوشته شده است.
 اطلاعات ربات‌ها از قبل داخل کد ثبت شده و **هیچ فایل `.env`ی لازم نیست**:
 
@@ -52,7 +68,10 @@ python3 -m pip install --user flask      # فقط برای بخش اختیاری
 2. در همان صفحه، لینک **WSGI configuration file** را باز کنید
    (`/var/www/arezog210_pythonanywhere_com_wsgi.py`).
 3. **کل محتوای فایل** را پاک کنید و این را بگذارید (فقط `USERNAME` را اگر
-   متفاوت است عوض کنید):
+   متفاوت است عوض کنید).
+
+   > ⛔️ این متن را در **Bash console** اجرا نکنید؛ فقط داخل فایل WSGI در تب Web.
+   > اگر در Bash اجرا شود خطاهایی مثل `USERNAME: command not found` می‌گیری.
 
 ```python
 import sys, os

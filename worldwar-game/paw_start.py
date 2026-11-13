@@ -103,6 +103,7 @@ def main() -> None:
         print("   ✅ دیتابیس آماده است")
     except Exception as exc:  # noqa: BLE001
         print("   ⚠️ آماده‌سازی دیتابیس:", exc)
+        print("   (اگر وسط ساخت جداول یا دیتابیس قفل بود، دوباره اجرا کنید؛ عملیات idempotent است)")
 
     # ۱٫۵) کلید وبهوک: اگر تنظیم نشده باشد ساخته و ذخیره می‌شود (الزامی — بدون
     #      کلید، سرویس هیچ آپدیتی را نمی‌پذیرد)
@@ -118,6 +119,26 @@ def main() -> None:
     print("🔗 ثبت وبهوک هر دو ربات ...")
     result = http_get(f"{base}/setup")
     print("   ", json.dumps(result, ensure_ascii=False)[:600])
+    if not isinstance(result, dict) or result.get("httpStatus") == 404:
+        print(
+            "\n❌ آدرس /setup روی سایت پیدا نشد (404) — یعنی **اپ وب روی PythonAnywhere\n"
+            "   به کد این پروژه وصل نیست**. ربات سالم است؛ فقط وب‌اپ تنظیم نشده.\n"
+            "   در تب Web: «WSGI configuration file» را باز کنید و کل محتوایش را با این\n"
+            "   جایگزین کنید (USERNAME را عوض کنید)، بعد Reload بزنید:\n\n"
+            f"       import sys, os\n"
+            f"       BASE = \"/home/{os.getenv('USER', 'USERNAME') or 'USERNAME'}/game\"\n"
+            f"       sys.path.insert(0, os.path.join(BASE, \"worldwar-game\"))\n"
+            f"       sys.path.insert(0, BASE)\n"
+            f"       os.environ[\"PAW_PROXY\"] = \"1\"\n"
+            f"       os.environ[\"PUBLIC_BASE_URL\"] = \"{base}\"\n"
+            f"       from webapp.paw_wsgi import application\n\n"
+            "   سپس همین دستور را دوباره اجرا کنید.\n")
+        raise SystemExit(2)
+    if isinstance(result, dict) and result.get("httpStatus") == 403:
+        print("\n❌ سرویس کلید وبهوک را نپذیرفت (403). کلید سایت و Bash یکی نیست:\n"
+              "   مرورگر: %s/panel یا از پنل ادمین «🧩 چرخاندن کلید وبهوک» را بزنید،\n"
+              "   بعد همین دستور را تکرار کنید.\n" % base)
+        raise SystemExit(3)
 
     # ۳) بیدار نگه داشتن و پردازش آپدیت‌های معلق
     if args.keep_alive > 0:

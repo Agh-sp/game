@@ -241,9 +241,14 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
     # مهاجم است و تجهیزات غیردریایی هم آسیب نمی‌بینند.
     atk_rows = await combat.equipment_rows(user_id, ("sea",))
     atk_units_in_fight = sum(int(r.get("quantity") or 0) for r in atk_rows)
-    def_kill_cap = await combat.defend_cap(user_id, atk_units_in_fight)
     atk_losses, atk_units = await combat.apply_capped_losses(
         user_id, atk_rows, atk_ratio, atk_units_in_fight, "equipment")
+    # ⚓ فرق تنگه با حملهٔ کشورها: در تنگه **تمام ناوگان مدافع** در آب‌های خودش
+    # می‌جنگد (نه یک یورش کوچک روی انبار خشکی)، پس فرسایش تضمینی ۱۸٪ روی همان
+    # ناوگان اعمال می‌شود — ولی هرگز بیش از آنچه دارد و هرگز روی تانک/هواپیمای خشکی.
+    def_front_rows = [r for r in def_rows if (r.get("cat_key") or "") in ("sea", "air")]
+    def_units_in_fight = sum(int(r.get("quantity") or 0) for r in def_front_rows)
+    def_kill_cap = max(def_units_in_fight, 1)
     def_losses, def_units = await combat.apply_front_losses(
         old_owner, def_rows, def_ratio, def_kill_cap, "equipment", ("sea", "air"))
     if strat["key"] in ("amphibious", "combined"):
@@ -258,8 +263,8 @@ async def capture_strait(bot, user_id: int, strait_id: int) -> str:
 
     extra = [
         f"♻️ <b>نبرد فرسایشی:</b> ناوگان مدافع {round(attrition * 100)}٪ آسیب دید.",
-        f"⚓ <b>ناوگان درگیر:</b> شما {fmt(atk_units_in_fight)} یگان — "
-        f"سقف انهدام ناوگان مدافع در این نبرد: {fmt(def_kill_cap)} یگان",
+        f"⚓ <b>ناوگان درگیر:</b> شما {fmt(atk_units_in_fight)} یگان در برابر "
+        f"{fmt(def_units_in_fight)} یگان ناوگان/هوایی مدافع",
     ]
     if won:
         await db.execute("UPDATE straits SET owner_id=?, captured_at=? WHERE id=?",
