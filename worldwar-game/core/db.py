@@ -1,9 +1,14 @@
 """لایه دیتابیس: اتصال aiosqlite + اسکیمای کامل بازی «جنگ جهانی ۳»."""
+import logging
+import os
+
 import aiosqlite
 
 from core import seed
 from core.config import DB_PATH, SUPER_ADMIN_ID
 from core.utils import iso
+
+log = logging.getLogger("core.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS admins (
@@ -1023,8 +1028,18 @@ async def set_setting(key: str, value: str) -> None:
 
 
 async def init_db() -> None:
-    """ایجاد جدول‌ها، مهاجرت‌ها، داده‌های اولیه و سوپرادمین — idempotent و کاملاً محافظت‌شده."""
-    backup_db()
+    """ایجاد جدول‌ها، مهاجرت‌ها، داده‌های اولیه و سوپرادمین — idempotent و کاملاً محافظت‌شده.
+
+    ⚠️ اگر وسط کار قطع شود (Ctrl+C در کنسول PythonAnywhere، تایم‌اوت وب‌سرور)،
+    دیتابیس نیم‌کاره نمی‌ماند: هر بخش در تراکنش خودش commit می‌شود و اجرای دوباره
+    فقط کارهای باقی‌مانده را انجام می‌دهد. برای همین فقط در دیتابیس تازه پشتیبان
+    گرفته می‌شود (روی PythonAnywhere کپی ۵۰۰KB در هر استارت، استارت را کند می‌کند).
+    """
+    fresh = not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) < 1024
+    if fresh:
+        backup_db()
+    else:
+        log.debug("init_db: دیتابیس موجود است، از پشتیبان‌گیری صرف‌نظر شد")
     await db.connect()
     await db.conn.executescript(SCHEMA)
     await db.conn.commit()

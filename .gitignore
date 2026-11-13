@@ -22,3 +22,10 @@ worldwar-game/*.db-shm
 *.zip
 !public/assets/**/*.zip
 worldwar-game/backups/*.db
+
+# ─── داده‌های زنده (روی سرور تغییر می‌کنند و نباید در گیت ادغام شوند) ───
+# برای انتشار نسخهٔ اولیه عمداً ردیابی می‌شوند؛ اگر دیگر نمی‌خواهی، دستور
+#   git rm --cached worldwar-game/wwgame.db worldwar-game/fb_local.json
+# را یک‌بار بزن (فایل محلی باقی می‌ماند) و این دو خط را از کامنت خارج کن.
+# worldwar-game/wwgame.db
+# worldwar-game/fb_local.json

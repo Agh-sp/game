@@ -374,8 +374,19 @@ Dispatcher ها می‌دهد و کارهای دوره‌ای (درآمد، نف
 با محدودیت یک‌دقیقه‌ای اجرا می‌کند.
 
 ```bash
-python3 paw_start.py --base-url https://USERNAME.pythonanywhere.com   # ثبت وبهوک + استارت
+python3 paw_update.py --base-url https://USERNAME.pythonanywhere.com   # به‌روزرسانی امن کد (بدون درگیری گیت)
+python3 paw_start.py --base-url https://USERNAME.pythonanywhere.com  # ثبت وبهوک + استارت
+python3 paw_doctor.py --base-url https://USERNAME.pythonanywhere.com # 🩺 عیب‌یابی خودکار ۷ مرحله‌ای
 ```
+
+- 🩺 **اگر `/setup` گفت `404 NOT FOUND`**: اپ وب به پروژه وصل نیست (پیام `botsReady=None`
+  هم همین را می‌گوید). `paw_doctor.py` دقیقاً می‌گوید کدام مرحله جا افتاده؛ معمولاً
+  کافی است محتوای تب **Web → WSGI configuration file** را با نمونهٔ همین README
+  جایگزین و **Reload** کنی. کد پایتون را داخل Bash console اجرا نکن.
+- 🚀 `paw_update.py` قبل از `git pull` از دیتابیس بکاپ
+  می‌گیرد، `wwgame.db` و `fb_local.json` را کنار می‌گذارد و بعد بازمی‌گرداند؛
+  دیگر `git pull` با پیام «needs merge» گیر نمی‌کند.
+- ♻️ روی PythonAnywhere هرگز `run_bots.py` (polling) را اجرا نکن؛ فقط Webhook.
 
 مسیرهای سرویس: `/health`، `/info`، `/setup`، `/panel`، `/webhook/game`، `/webhook/admin`.
 راهنمای کامل: `../DEPLOY_PYTHONANYWHERE.md`.
